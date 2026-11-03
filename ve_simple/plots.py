@@ -69,7 +69,8 @@ def _panel(ax, variants: pd.DataFrame, title: str, predictors: list[str]) -> int
     ax.grid(True, color=GRID, linewidth=0.5)
     ax.set_axisbelow(True)
     if n_curves:
-        ax.legend(fontsize=5, frameon=False, loc="lower right", handlelength=2.2, labelcolor=TEXT2)
+        ax.legend(fontsize=5, frameon=True, framealpha=0.85, edgecolor="none", loc="lower right",
+                  handlelength=2.2, labelcolor=TEXT2)
     else:
         ax.text(0.5, 0.5, "no pathogenic/benign pairs", ha="center", va="center", fontsize=7, color=TEXT2)
     return n_curves
@@ -87,9 +88,12 @@ def roc_pdf(variants: pd.DataFrame, proteins: pd.DataFrame, out_pdf: Path,
     n_pages = max(1, math.ceil(len(accs) / per_page))
     with PdfPages(out_pdf) as pdf:
         for page in range(n_pages):
-            fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.2, nrows * 3.4))
-            axes = axes.ravel() if hasattr(axes, "ravel") else [axes]
             chunk = accs[page * per_page:(page + 1) * per_page]
+            # size the page to the panels it actually holds (last page may be partially filled)
+            rows = max(1, min(nrows, math.ceil(max(1, len(chunk)) / ncols)))
+            cols = ncols if len(chunk) >= ncols else max(1, len(chunk))
+            fig, axes = plt.subplots(rows, cols, figsize=(cols * 3.2, rows * 3.4), squeeze=False)
+            axes = axes.ravel()
             for ax, acc in zip(axes, chunk):
                 sub = variants[variants["accession"] == acc]
                 m = meta.loc[acc]

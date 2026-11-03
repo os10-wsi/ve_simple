@@ -46,8 +46,8 @@ def delong_auc_variance(pos: np.ndarray, neg: np.ndarray) -> tuple[float, float]
     ty = _compute_midrank(neg)
     tz = _compute_midrank(scores)
     auc = (tz[:m].sum() / m - (m + 1) / 2.0) / n
-    v10 = tz[:m] - tx           # structural components for positives
-    v01 = 1.0 - (tz[m:] - ty)   # structural components for negatives
+    v10 = (tz[:m] - tx) / n          # structural components for positives
+    v01 = 1.0 - (tz[m:] - ty) / m    # structural components for negatives
     s10 = np.var(v10, ddof=1) if m > 1 else 0.0
     s01 = np.var(v01, ddof=1) if n > 1 else 0.0
     var = s10 / m + s01 / n

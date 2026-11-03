@@ -52,3 +52,16 @@ def test_roc_points_and_wide():
     long = auc_for_protein(df, "P1", n_boot=10)
     wide = wide_auc_table(long, pd.DataFrame([{"accession": "P1", "gene": "G1", "length": 60}]))
     assert len(wide) == 1 and "esm1v_auc" in wide.columns and "esm1v_ci_high" in wide.columns
+
+
+def test_delong_se_matches_bootstrap_sd():
+    rng = np.random.default_rng(3)
+    pos = rng.normal(1.0, 1, 150)
+    neg = rng.normal(0.0, 1, 100)
+    auc, var = delong_auc_variance(pos, neg)
+    boots = []
+    for _ in range(400):
+        p = rng.choice(pos, len(pos)); q = rng.choice(neg, len(neg))
+        boots.append(roc_auc_score(np.r_[np.ones(len(p)), np.zeros(len(q))], np.r_[p, q]))
+    assert 0.5 * np.std(boots) < np.sqrt(var) < 1.5 * np.std(boots)
+    assert np.sqrt(var) < 0.06

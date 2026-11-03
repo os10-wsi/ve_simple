@@ -235,7 +235,6 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
     todo = [st for st in states if _load_cached(cfg, st.acc, "esm1v") is None]
     per_model: dict[str, list[np.ndarray]] = {st.acc: [] for st in todo}
     for mi, name in enumerate(esm_mod.ESM1V_MODELS[:n_models]):
-        pending = [st for st in todo if not (Path(cfg.cache_dir) / st.acc / f"esm1v_{mi + 1}.npy").exists() or cfg.force]
         scorer = None
         for st in todo:
             npy = Path(cfg.cache_dir) / st.acc / f"esm1v_{mi + 1}.npy"
@@ -254,7 +253,6 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
                 log.error("%s: ESM-1v failed: %s\n%s", st.acc, e, traceback.format_exc())
         if scorer is not None:
             scorer.close()
-        del pending
     for st in states:
         df = _load_cached(cfg, st.acc, "esm1v")
         if df is None and per_model.get(st.acc):
