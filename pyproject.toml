@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ve_simple"
+version = "0.1.0"
+description = "Simple variant-effect scoring and ClinVar ROC-AUC benchmarking pipeline for lists of UniProt IDs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "scikit-learn",
+  "matplotlib",
+  "requests",
+  "biopython",
+  "mini3di",
+  "torch",
+  "transformers",
+  "huggingface_hub",
+  "pytorch-lightning",
+  "omegaconf",
+  "joblib",
+  "tqdm",
+  "pyyaml",
+]
+
+[project.scripts]
+ve-simple = "ve_simple.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ve_simple*"]

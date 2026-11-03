@@ -1,0 +1,5 @@
+# One UniProt accession per line (comments and blank lines are ignored)
+P04637   # TP53, human
+P38398   # BRCA1, human
+P00533   # EGFR, human
+P02185   # myoglobin, sperm whale (non-human: no ClinVar / AlphaMissense)

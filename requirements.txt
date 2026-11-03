@@ -1,0 +1,16 @@
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+requests
+biopython
+mini3di
+torch
+transformers
+huggingface_hub
+pytorch-lightning
+omegaconf
+joblib
+tqdm
+pyyaml
