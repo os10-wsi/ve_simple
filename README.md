@@ -54,6 +54,9 @@ Optional:
   `--foldx-binary /path/to/foldx` or `export FOLDX_BINARY=...`. Without it the `foldx` column is empty.
 * **Foldseek** (3Di tokens for SaProt). The pure-Python `mini3di` port is used by default; if a
   `foldseek` binary is on PATH (or `VE_SIMPLE_FOLDSEEK` is set) it is used instead.
+* Model weights (about 16 GB for the five ESM-1v models and SaProt) are stored under
+  `$HF_HOME`, which the pipeline sets to `<cache>/huggingface` unless you export it yourself.
+  Put it on a large filesystem, not a quota-limited home directory.
 * A GPU is strongly recommended for ESM-1v and SaProt (650M parameters each; every position of
   every protein needs one masked forward pass). On a 4-core CPU with `--batch-size 8` each model
   takes roughly 2.5 s per residue (about 6 min per model for a 150-residue protein), so for CPU

@@ -40,7 +40,19 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("-v", "--verbose", action="store_true")
 
 
+def _set_hf_home(cache_dir: Path) -> None:
+    """Keep model weights (16 GB for ESM-1v x5 + SaProt) next to the pipeline cache, not in $HOME."""
+    import os
+
+    if not os.environ.get("HF_HOME"):
+        hf = Path(cache_dir).resolve() / "huggingface"
+        hf.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(hf)
+    logging.getLogger("ve_simple").info("Hugging Face weights cache: %s", os.environ["HF_HOME"])
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+    _set_hf_home(args.cache)
     from .pipeline import Config, run_pipeline
 
     ids = read_id_list(args.ids) if args.ids else []
