@@ -4,7 +4,7 @@
 set -euo pipefail
 IDS=${1:?id list}
 CHUNK=${2:-100}
-QUEUE=${GPU_QUEUE:-gpu-normal}
+QUEUE=${GPU_QUEUE:-gpu}
 mkdir -p lsf/chunks lsf/logs
 python -c 'import sys; from ve_simple.utils import read_id_list; print("\n".join(read_id_list(sys.argv[1])))' "$IDS" > lsf/chunks/all_ids.txt
 split -l "$CHUNK" -d -a 3 lsf/chunks/all_ids.txt lsf/chunks/ids_
