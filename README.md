@@ -60,6 +60,17 @@ Optional:
   runs use `--esm1v-models 1` or `--skip esm1v,saprot`. Sequences longer than 1022 residues are
   scored in a sliding 1022-residue window centred on each position.
 
+### GPU builds of torch
+
+The default PyPI `torch` wheel targets the newest CUDA toolkit; if the cluster's NVIDIA driver is
+older you will see `The NVIDIA driver on your system is too old` and the pipeline falls back to
+CPU. Install a wheel matching the driver (check `nvidia-smi` for the supported CUDA version), e.g.
+for a CUDA 12.4 driver:
+
+```bash
+pip uninstall -y torch && pip install "torch==2.6.0" --index-url https://download.pytorch.org/whl/cu124
+```
+
 ## Usage
 
 ```bash

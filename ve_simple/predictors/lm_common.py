@@ -18,14 +18,32 @@ log = logging.getLogger(__name__)
 MAX_RESIDUES = 1022  # ESM-1v / ESM-2 positional limit (1024 tokens incl. <cls> and <eos>)
 
 
+def _cuda_usable() -> bool:
+    """True if CUDA is available AND can actually be initialised (driver/toolkit versions match)."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return False
+    try:
+        torch.zeros(1).cuda()
+        return True
+    except Exception as e:  # noqa: BLE001  (e.g. "NVIDIA driver on your system is too old")
+        log.warning("CUDA reported available but cannot be initialised (%s); falling back to CPU. "
+                    "Install a torch build matching your driver, e.g. "
+                    "pip install torch --index-url https://download.pytorch.org/whl/cu124", str(e).split("\n")[0])
+        return False
+
+
 def resolve_device(device: str = "auto") -> str:
     import torch
 
     if device == "auto":
-        if torch.cuda.is_available():
+        if _cuda_usable():
             return "cuda"
         if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
             return "mps"
+        return "cpu"
+    if device.startswith("cuda") and not _cuda_usable():
         return "cpu"
     return device
 
