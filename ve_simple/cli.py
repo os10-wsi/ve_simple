@@ -36,6 +36,9 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--strict-labels", action="store_true",
                    help="use only Pathogenic/Benign (exclude Likely pathogenic / Likely benign)")
     p.add_argument("--plot-predictors", default=None, help="comma-separated predictors to draw in the ROC PDF")
+    p.add_argument("--batch-proteins", type=int, default=25,
+                   help="proteins processed together per stage (bounds memory; models stay loaded across batches)")
+    p.add_argument("--no-pdf", action="store_true", help="skip the ROC PDF (useful for proteome-scale runs)")
     p.add_argument("--force", action="store_true", help="recompute cached predictor scores")
     p.add_argument("-v", "--verbose", action="store_true")
 
@@ -72,7 +75,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         foldx_binary=args.foldx_binary, foldx_chunk=args.foldx_chunk, foldx_workers=args.foldx_workers, foldx_scope=args.foldx_scope,
         thermompnn_download=not args.no_thermompnn_download, thermompnn_compute=not args.no_thermompnn_compute,
         n_boot=args.bootstrap, min_per_class=args.min_per_class, include_likely=not args.strict_labels,
-        force=args.force,
+        force=args.force, batch_proteins=max(1, args.batch_proteins), make_pdf=not args.no_pdf,
     )
     if args.plot_predictors:
         cfg.plot_predictors = [s.strip() for s in args.plot_predictors.split(",") if s.strip()]
@@ -107,14 +110,15 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 
     db = ResultsDB(Path(args.out) / "ve_simple.sqlite")
     proteins = db.read("proteins")
-    variants = db.read("variants")
-    if proteins.empty or variants.empty:
+    if proteins.empty:
         print("No results found in", args.out, file=sys.stderr)
         return 1
     human = proteins[proteins["is_human"].astype(bool)]
+    # only labelled variants are needed for AUCs and plots; read them once instead of the whole table
+    labelled = pd.read_sql("SELECT * FROM variants WHERE clinvar_label IN ('pathogenic','benign')", db.conn)
     frames = []
     for acc in human["accession"]:
-        sub = variants[variants["accession"] == acc]
+        sub = labelled[labelled["accession"] == acc]
         auc = auc_for_protein(sub, acc, n_boot=args.bootstrap, min_per_class=args.min_per_class)
         frames.append(auc)
         db.write_auc(auc)
@@ -122,7 +126,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     auc_long.to_csv(Path(args.out) / "auc_long.tsv", sep="\t", index=False)
     wide_auc_table(auc_long, human).to_csv(Path(args.out) / "auc_per_protein.tsv", sep="\t", index=False)
     preds = [s.strip() for s in args.plot_predictors.split(",")] if args.plot_predictors else DEFAULT_PLOT_PREDICTORS
-    roc_pdf(variants[variants["accession"].isin(human["accession"])], human, Path(args.out) / "roc_curves.pdf", preds)
+    if not args.no_pdf and len(labelled):
+        roc_pdf(labelled, human, Path(args.out) / "roc_curves.pdf", preds)
     db.close()
     print("Updated AUC tables and ROC PDF in", args.out)
     return 0
@@ -145,6 +150,7 @@ def main(argv=None) -> int:
     p_e.add_argument("--bootstrap", type=int, default=1000)
     p_e.add_argument("--min-per-class", type=int, default=1)
     p_e.add_argument("--plot-predictors", default=None)
+    p_e.add_argument("--no-pdf", action="store_true")
     p_e.add_argument("-v", "--verbose", action="store_true")
     p_e.set_defaults(func=cmd_evaluate)
     args = parser.parse_args(argv)

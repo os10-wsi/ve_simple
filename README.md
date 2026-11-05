@@ -80,7 +80,9 @@ pip uninstall -y torch && pip install "torch==2.6.0" --index-url https://downloa
 ve-simple run --ids examples/ids_example.txt --out results/
 ```
 
-Useful options: `--device cuda`, `--esm1v-models 1`, `--skip foldx,saprot`, `--foldx-scope clinvar`
+The ID file may be a plain list, a UniProt TSV download or FASTA; the first accession on each line is used.
+
+Useful options: `--device cuda`, `--esm1v-models 1`, `--skip foldx,saprot`, `--foldx-scope clinvar`, `--batch-proteins 25`, `--no-pdf`
 (FoldX only at positions with ClinVar variants), `--bootstrap 2000`, `--min-per-class 5`,
 `--strict-labels`, `--no-thermompnn-compute`, `--force`.
 

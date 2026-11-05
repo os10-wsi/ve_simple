@@ -53,6 +53,8 @@ class Config:
     min_per_class: int = 1
     include_likely: bool = True
     plot_predictors: list[str] = field(default_factory=lambda: list(DEFAULT_PLOT_PREDICTORS))
+    make_pdf: bool = True
+    batch_proteins: int = 25                           # proteins processed together per stage
     force: bool = False
 
 
@@ -70,6 +72,51 @@ class ProteinState:
     @property
     def acc(self) -> str:
         return self.entry.accession
+
+
+class ScorerPool:
+    """Keeps ESM-1v / SaProt models loaded across protein batches.
+
+    On a GPU all six models stay resident (about 8 GB in fp16); on CPU only one model is kept to
+    bound memory, so models are reloaded once per batch.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self._scorers: dict[str, object] = {}
+        self._max_resident: Optional[int] = None
+
+    def _limit(self) -> int:
+        if self._max_resident is None:
+            from .predictors.lm_common import resolve_device
+            self._max_resident = 8 if resolve_device(self.cfg.device) == "cuda" else 1
+        return self._max_resident
+
+    def _evict_for(self, key: str) -> None:
+        while len(self._scorers) >= self._limit() and key not in self._scorers:
+            old_key, old = next(iter(self._scorers.items()))
+            old.close()
+            del self._scorers[old_key]
+
+    def esm1v(self, model_name: str):
+        from .predictors import esm1v as esm_mod
+        if model_name not in self._scorers:
+            self._evict_for(model_name)
+            self._scorers[model_name] = esm_mod.ESM1vScorer(model_name, device=self.cfg.device,
+                                                            batch_size=self.cfg.batch_size)
+        return self._scorers[model_name]
+
+    def saprot(self):
+        from .predictors import saprot as sp_mod
+        if "saprot" not in self._scorers:
+            self._evict_for("saprot")
+            self._scorers["saprot"] = sp_mod.SaProtScorer(device=self.cfg.device, batch_size=self.cfg.batch_size)
+        return self._scorers["saprot"]
+
+    def close(self) -> None:
+        for sc in self._scorers.values():
+            sc.close()
+        self._scorers.clear()
 
 
 def _cache_path(cfg: Config, acc: str, name: str) -> Path:
@@ -116,9 +163,9 @@ def _check_structure_matches(st: ProteinState) -> bool:
 
 
 # ------------------------------------------------------------------------------- stage 1: fetch
-def stage_fetch(cfg: Config) -> list[ProteinState]:
+def stage_fetch(cfg: Config, ids: Optional[list[str]] = None) -> list[ProteinState]:
     states = []
-    for acc in cfg.ids:
+    for acc in (cfg.ids if ids is None else ids):
         try:
             entry = uniprot.fetch_entry(acc, cfg.cache_dir)
         except Exception as e:  # noqa: BLE001
@@ -185,19 +232,28 @@ def stage_simple(cfg: Config, states: list[ProteinState]) -> None:
 
 
 # ---------------------------------------------------------------------- stage 3: ThermoMPNN
-def stage_thermompnn(cfg: Config, states: list[ProteinState]) -> None:
+def prepare_thermompnn_archive(cfg: Config) -> Optional[tm_mod.ZenodoThermoMPNN]:
+    """Download/index the Zenodo archive and extract every requested protein in ONE streaming pass."""
+    if "thermompnn" in cfg.skip:
+        return None
+    zen = tm_mod.ZenodoThermoMPNN(cfg.data_dir)
+    if zen.ensure_archive(download=cfg.thermompnn_download) is None:
+        return None
+    zen.build_index()
+    todo = [acc for acc in cfg.ids if _load_cached(cfg, acc, "thermompnn") is None]
+    if todo:
+        zen.extract(todo)
+    return zen
+
+
+def stage_thermompnn(cfg: Config, states: list[ProteinState], zen: Optional[tm_mod.ZenodoThermoMPNN]) -> None:
     if "thermompnn" in cfg.skip:
         for st in states:
             df = _load_cached(cfg, st.acc, "thermompnn")
             st.notes["thermompnn_source"] = df["thermompnn_source"].iloc[0] if df is not None and len(df) else "skipped"
             st.variants = _merge(st.variants, df, ["thermompnn"])
         return
-    zen = tm_mod.ZenodoThermoMPNN(cfg.data_dir)
-    archive = zen.ensure_archive(download=cfg.thermompnn_download)
-    todo = [st for st in states if _load_cached(cfg, st.acc, "thermompnn") is None]
-    if archive is not None and todo:
-        zen.build_index()
-        zen.extract([st.acc for st in todo if st.entry.is_human])
+    archive = zen.archive if zen is not None and zen.archive.exists() else None
     for st in states:
         df = _load_cached(cfg, st.acc, "thermompnn")
         source = st.notes.get("thermompnn_source")
@@ -226,7 +282,7 @@ def stage_thermompnn(cfg: Config, states: list[ProteinState]) -> None:
 
 
 # -------------------------------------------------------------------------- stage 4: ESM-1v
-def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
+def stage_esm1v(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> None:
     from .predictors import esm1v as esm_mod
 
     col = "esm1v"
@@ -238,14 +294,12 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
     todo = [st for st in states if _load_cached(cfg, st.acc, "esm1v") is None]
     per_model: dict[str, list[np.ndarray]] = {st.acc: [] for st in todo}
     for mi, name in enumerate(esm_mod.ESM1V_MODELS[:n_models]):
-        scorer = None
         for st in todo:
             npy = Path(cfg.cache_dir) / st.acc / f"esm1v_{mi + 1}.npy"
             if npy.exists() and not cfg.force:
                 per_model[st.acc].append(np.load(npy))
                 continue
-            if scorer is None:
-                scorer = esm_mod.ESM1vScorer(name, device=cfg.device, batch_size=cfg.batch_size)
+            scorer = pool.esm1v(name)
             try:
                 log.info("%s: ESM-1v model %d/%d (%d positions)", st.acc, mi + 1, n_models, len(st.entry.sequence))
                 mat = scorer.score_matrix(st.entry.sequence)
@@ -254,8 +308,6 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"esm1v: {e}")
                 log.error("%s: ESM-1v failed: %s\n%s", st.acc, e, traceback.format_exc())
-        if scorer is not None:
-            scorer.close()
     for st in states:
         df = _load_cached(cfg, st.acc, "esm1v")
         if df is None and per_model.get(st.acc):
@@ -265,20 +317,17 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
 
 
 # -------------------------------------------------------------------------- stage 5: SaProt
-def stage_saprot(cfg: Config, states: list[ProteinState]) -> None:
-    from .predictors import saprot as sp_mod
+def stage_saprot(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> None:
 
     col = "saprot"
     if col in cfg.skip:
         for st in states:
             st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "saprot"), [col])
         return
-    scorer = None
     for st in states:
         df = _load_cached(cfg, st.acc, "saprot")
         if df is None and st.pdb is not None:
-            if scorer is None:
-                scorer = sp_mod.SaProtScorer(device=cfg.device, batch_size=cfg.batch_size)
+            scorer = pool.saprot()
             try:
                 log.info("%s: SaProt (%d positions)", st.acc, len(st.entry.sequence))
                 df = scorer.score_frame(st.pdb)
@@ -287,8 +336,6 @@ def stage_saprot(cfg: Config, states: list[ProteinState]) -> None:
                 st.errors.append(f"saprot: {e}")
                 log.error("%s: SaProt failed: %s\n%s", st.acc, e, traceback.format_exc())
         st.variants = _merge(st.variants, df, [col])
-    if scorer is not None:
-        scorer.close()
 
 
 # --------------------------------------------------------------------------- stage 6: FoldX
@@ -358,58 +405,79 @@ def protein_row(st: ProteinState, cfg: Config) -> dict:
 
 
 def run_pipeline(cfg: Config) -> dict:
+    """Process proteins in batches; stream per-variant results to disk so memory stays bounded."""
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     db = ResultsDB(out / "ve_simple.sqlite")
+    zen = prepare_thermompnn_archive(cfg)
+    pool = ScorerPool(cfg)
 
-    states = stage_fetch(cfg)
-    if not states:
+    tsv_path = out / "variant_scores.tsv"
+    cv_path = out / "clinvar_variants.tsv"
+    for pth in (tsv_path, cv_path):
+        if pth.exists():
+            pth.unlink()
+    prot_rows: list[dict] = []
+    auc_frames: list[pd.DataFrame] = []
+    labelled_frames: list[pd.DataFrame] = []   # pathogenic/benign variants only, for the ROC plots
+    n_variants = 0
+    n_batches = max(1, (len(cfg.ids) + cfg.batch_proteins - 1) // cfg.batch_proteins)
+
+    for bi in range(n_batches):
+        batch_ids = cfg.ids[bi * cfg.batch_proteins:(bi + 1) * cfg.batch_proteins]
+        log.info("Batch %d/%d (%d proteins)", bi + 1, n_batches, len(batch_ids))
+        states = stage_fetch(cfg, batch_ids)
+        if not states:
+            continue
+        stage_simple(cfg, states)
+        stage_thermompnn(cfg, states, zen)
+        stage_esm1v(cfg, states, pool)
+        stage_saprot(cfg, states, pool)
+        stage_foldx(cfg, states)
+        for st in states:
+            attach_clinvar(st)
+            prow = protein_row(st, cfg)
+            prot_rows.append(prow)
+            db.write_protein(prow)
+            db.write_variants(st.variants)
+            st.variants.to_csv(tsv_path, sep="\t", index=False, mode="a", header=not tsv_path.exists())
+            n_variants += len(st.variants)
+            if len(st.clinvar_df):
+                db.write_clinvar(st.clinvar_df)
+                st.clinvar_df.to_csv(cv_path, sep="\t", index=False, mode="a", header=not cv_path.exists())
+            if st.entry.is_human:
+                auc = auc_for_protein(st.variants, st.acc, n_boot=cfg.n_boot, min_per_class=cfg.min_per_class)
+                auc_frames.append(auc)
+                db.write_auc(auc)
+                lab = st.variants[st.variants["clinvar_label"].isin(["pathogenic", "benign"])]
+                if len(lab):
+                    labelled_frames.append(lab)
+            write_json({"notes": st.notes, "errors": st.errors}, Path(cfg.cache_dir) / st.acc / "status.json")
+        del states
+    pool.close()
+
+    if not prot_rows:
         raise SystemExit("No valid UniProt accessions could be fetched.")
-    stage_simple(cfg, states)
-    stage_thermompnn(cfg, states)
-    stage_esm1v(cfg, states)
-    stage_saprot(cfg, states)
-    stage_foldx(cfg, states)
-
-    prot_rows, auc_frames = [], []
-    for st in states:
-        attach_clinvar(st)
-        prow = protein_row(st, cfg)
-        prot_rows.append(prow)
-        db.write_protein(prow)
-        db.write_variants(st.variants)
-        if len(st.clinvar_df):
-            db.write_clinvar(st.clinvar_df)
-        if st.entry.is_human:
-            auc = auc_for_protein(st.variants, st.acc, n_boot=cfg.n_boot, min_per_class=cfg.min_per_class)
-            auc_frames.append(auc)
-            db.write_auc(auc)
-        write_json({"notes": st.notes, "errors": st.errors}, Path(cfg.cache_dir) / st.acc / "status.json")
-
+    if not cv_path.exists():
+        pd.DataFrame(columns=clinvar.CLINVAR_COLUMNS).to_csv(cv_path, sep="\t", index=False)
     proteins = pd.DataFrame(prot_rows)
-    variants = pd.concat([st.variants for st in states], ignore_index=True)
     auc_long = pd.concat(auc_frames, ignore_index=True) if auc_frames else pd.DataFrame()
     human = proteins[proteins["is_human"]] if len(proteins) else proteins
     auc_wide = wide_auc_table(auc_long, human) if len(human) else pd.DataFrame()
-
     proteins.to_csv(out / "proteins.tsv", sep="\t", index=False)
-    variants.to_csv(out / "variant_scores.tsv", sep="\t", index=False)
-    cv_all = pd.concat([st.clinvar_df for st in states if len(st.clinvar_df)], ignore_index=True) \
-        if any(len(st.clinvar_df) for st in states) else pd.DataFrame(columns=clinvar.CLINVAR_COLUMNS)
-    cv_all.to_csv(out / "clinvar_variants.tsv", sep="\t", index=False)
     auc_long.to_csv(out / "auc_long.tsv", sep="\t", index=False)
     auc_wide.to_csv(out / "auc_per_protein.tsv", sep="\t", index=False)
     pdf = None
-    if len(human):
-        hv = variants[variants["accession"].isin(human["accession"])]
-        pdf = roc_pdf(hv, human, out / "roc_curves.pdf", predictors=cfg.plot_predictors)
+    if cfg.make_pdf and labelled_frames:
+        labelled = pd.concat(labelled_frames, ignore_index=True)
+        pdf = roc_pdf(labelled, human, out / "roc_curves.pdf", predictors=cfg.plot_predictors)
     db.close()
     summary = {
-        "n_requested": len(cfg.ids), "n_proteins": len(states), "n_human": int(len(human)),
-        "n_variants": int(len(variants)), "n_with_auc": int(auc_long["accession"].nunique()) if len(auc_long) else 0,
+        "n_requested": len(cfg.ids), "n_proteins": len(prot_rows), "n_human": int(len(human)),
+        "n_variants": int(n_variants), "n_with_auc": int(auc_long["accession"].nunique()) if len(auc_long) else 0,
         "outputs": {
-            "proteins": str(out / "proteins.tsv"), "variant_scores": str(out / "variant_scores.tsv"),
-            "clinvar_variants": str(out / "clinvar_variants.tsv"), "auc_long": str(out / "auc_long.tsv"),
+            "proteins": str(out / "proteins.tsv"), "variant_scores": str(tsv_path),
+            "clinvar_variants": str(cv_path), "auc_long": str(out / "auc_long.tsv"),
             "auc_per_protein": str(out / "auc_per_protein.tsv"), "roc_pdf": str(pdf) if pdf else None,
             "sqlite": str(out / "ve_simple.sqlite"),
         },

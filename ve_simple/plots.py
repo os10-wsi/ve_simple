@@ -83,7 +83,13 @@ def roc_pdf(variants: pd.DataFrame, proteins: pd.DataFrame, out_pdf: Path,
     out_pdf = Path(out_pdf)
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     meta = proteins.set_index("accession")
-    accs = [a for a in meta.index if a in set(variants["accession"])]
+    lab = variants[variants["clinvar_label"].isin(["pathogenic", "benign"])]
+    both = lab.groupby("accession")["clinvar_label"].nunique()
+    plottable = set(both[both == 2].index)
+    accs = [a for a in meta.index if a in plottable]
+    if not accs:
+        log.warning("No protein has both pathogenic and benign ClinVar variants; no ROC PDF written")
+        return out_pdf
     per_page = ncols * nrows
     n_pages = max(1, math.ceil(len(accs) / per_page))
     with PdfPages(out_pdf) as pdf:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -93,7 +94,12 @@ def normalise_accession(acc: str) -> str:
     return acc.upper()
 
 
+ACCESSION_RE = re.compile(r"^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})(?:-\d+)?$")
+
+
 def read_id_list(path: Path) -> list[str]:
+    """Accessions from a plain list, a UniProt TSV download (first accession per line), FASTA headers
+    (sp|P04637|P53_HUMAN) or comma/whitespace separated text.  Isoform suffixes are dropped."""
     ids: list[str] = []
     seen = set()
     with open(path) as fh:
@@ -101,11 +107,13 @@ def read_id_list(path: Path) -> list[str]:
             line = line.split("#")[0].strip()
             if not line:
                 continue
-            for tok in line.replace(",", " ").split():
-                acc = normalise_accession(tok)
-                if acc not in seen:
-                    seen.add(acc)
-                    ids.append(acc)
+            for tok in re.split(r"[\s,;|>]+", line):
+                if ACCESSION_RE.match(tok):
+                    acc = normalise_accession(tok)
+                    if acc not in seen:
+                        seen.add(acc)
+                        ids.append(acc)
+                    break  # one accession per line (TSV rows carry other columns)
     return ids
 
 

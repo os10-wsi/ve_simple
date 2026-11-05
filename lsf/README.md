@@ -20,3 +20,25 @@ directory (or pass the same `--cache`, `--data-dir` and `--external-dir`) so tha
    combined tables, database, AUC statistics and ROC PDF.
 
 Edit the queue names, project, and module/venv lines at the top of each script for your cluster.
+
+## Proteome-scale runs (e.g. all reviewed human and yeast proteins)
+
+Run each proteome as its own set of jobs with its own output directory; the cache is shared.
+The ID files can be UniProt TSV downloads (the first accession on each line is used).
+
+    ve-simple fetch-zenodo --extract-all                       # once
+    bash lsf/phase1_gpu.sh uniprot_reviewed_9606.txt 100       # ~205 GPU jobs
+    bash lsf/phase1_gpu.sh uniprot_reviewed_559292.txt 100     # ~68 GPU jobs (ThermoMPNN computed de novo)
+    FOLDX_BINARY=... bash lsf/phase2_foldx.sh uniprot_reviewed_9606.txt 8
+    FOLDX_BINARY=... bash lsf/phase2_foldx.sh uniprot_reviewed_559292.txt 8
+    bash lsf/phase3_assemble.sh uniprot_reviewed_9606.txt results_human
+    bash lsf/phase3_assemble.sh uniprot_reviewed_559292.txt results_yeast
+
+Budget: on one GPU the six language models take roughly 1-3 minutes per protein, so the human
+proteome is ~500-1000 GPU-hours spread over the array. FoldX saturation mutagenesis is far larger:
+a few seconds per mutant times 19 x length, i.e. several CPU-hours for an average protein and
+weeks for the largest ones, so ~100,000 core-hours per proteome. `FOLDX_SCOPE=clinvar` restricts
+FoldX to positions with ClinVar variants (all the AUC benchmark needs) and cuts this ~50-fold;
+it is only meaningful for human proteins. Assembly streams proteins in batches, so it needs little
+memory, but the human `variant_scores.tsv` will be ~190 million rows (tens of GB); the SQLite
+database next to it has the same content indexed by accession.
