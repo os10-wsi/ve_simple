@@ -74,7 +74,10 @@ def masked_marginals(
     for p in positions:
         groups.setdefault(window_bounds(L, p, max_len), []).append(p)
 
+    from tqdm import tqdm
+
     model.eval()
+    bar = tqdm(total=len(positions), desc="masked positions", unit="pos", leave=False, disable=len(positions) < 50)
     with torch.no_grad():
         for (start, end), plist in groups.items():
             ctx = list(tokens[start:end])
@@ -102,6 +105,8 @@ def masked_marginals(
                     vals = row[aa_ids].cpu().numpy() - row[wt_id].item()
                     vals = np.where(np.asarray(aa_ids) == unk, np.nan, vals)
                     out[p] = vals
+                bar.update(len(chunk))
+    bar.close()
     return out
 
 
