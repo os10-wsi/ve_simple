@@ -80,6 +80,8 @@ ve-simple evaluate --out results/ --bootstrap 2000 --min-per-class 5
 Everything fetched or computed is cached per protein under `cache/<accession>/`, so re-runs only
 compute what is missing.
 
+Everything fetched or computed is cached per protein, and `--skip` leaves cached scores in place, so a run can be split into phases and jobs; see `lsf/README.md` for an LSF layout (GPU jobs for the language models, a job array for FoldX, one assembly job).
+
 ## Outputs (`results/`)
 
 | file | content |

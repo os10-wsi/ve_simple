@@ -52,10 +52,36 @@ def repair_pdb(binary: str, pdb_path: Path, work_dir: Path) -> Path:
     return repaired
 
 
+def _build_chunk(binary: str, repaired: Path, work_dir: Path, chain: str, tag: str,
+                 chunk: list[tuple[int, str, str]], number_of_runs: int) -> Optional[Path]:
+    """Run BuildModel for one chunk of mutants; returns the Dif_*.fxout path (or None on failure)."""
+    dif = work_dir / f"Dif_{repaired.stem}_{tag}.fxout"
+    if dif.exists():
+        return dif
+    mlist = work_dir / f"individual_list_{tag}.txt"
+    mlist.write_text("".join(f"{wt}{chain}{pos}{mut};\n" for pos, wt, mut in chunk))
+    res = _run(binary, ["--command=BuildModel", f"--pdb={repaired.name}", "--pdb-dir=.",
+                        f"--mutant-file={mlist.name}", f"--numberOfRuns={number_of_runs}",
+                        f"--output-file={repaired.stem}_{tag}", "--output-dir=."], work_dir)
+    if res.returncode != 0 or not dif.exists():
+        log.error("FoldX BuildModel failed for chunk %s: %s", tag, res.stdout[-1500:])
+        return None
+    # remove bulky mutant/WT model PDBs that BuildModel writes
+    for p in work_dir.glob(f"*{repaired.stem}_{tag}*.pdb"):
+        p.unlink()
+    return dif
+
+
 def foldx_saturation(binary: str, pdb_path: Path, work_dir: Path, chain: str = "A",
                      chunk_size: int = 200, positions: Optional[list[int]] = None,
-                     number_of_runs: int = 1) -> pd.DataFrame:
-    """BuildModel ddG for every single substitution (or only `positions`) of the first chain."""
+                     number_of_runs: int = 1, workers: int = 1) -> pd.DataFrame:
+    """BuildModel ddG for every single substitution (or only `positions`) of the first chain.
+
+    Mutants are processed in chunks of `chunk_size`; `workers` chunks run concurrently (FoldX is
+    single-threaded, so give the job that many cores).  Finished chunks are re-used on re-runs.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     work_dir = Path(work_dir)
     repaired = repair_pdb(binary, pdb_path, work_dir)
     _, seq, resnums, _ = read_pdb_chain(repaired)
@@ -66,26 +92,17 @@ def foldx_saturation(binary: str, pdb_path: Path, work_dir: Path, chain: str = "
         for mut in AMINO_ACIDS:
             if mut != aa:
                 muts.append((int(num), aa, mut))
+    chunks = [(f"c{ci // chunk_size:05d}", muts[ci:ci + chunk_size]) for ci in range(0, len(muts), chunk_size)]
     results: dict[tuple, float] = {}
-    for ci in range(0, len(muts), chunk_size):
-        chunk = muts[ci:ci + chunk_size]
-        tag = f"c{ci // chunk_size:05d}"
-        dif = work_dir / f"Dif_{repaired.stem}_{tag}.fxout"
-        if not dif.exists():
-            mlist = work_dir / f"individual_list_{tag}.txt"
-            mlist.write_text("".join(f"{wt}{chain}{pos}{mut};\n" for pos, wt, mut in chunk))
-            res = _run(binary, ["--command=BuildModel", f"--pdb={repaired.name}", "--pdb-dir=.",
-                                f"--mutant-file={mlist.name}", f"--numberOfRuns={number_of_runs}",
-                                f"--output-file={repaired.stem}_{tag}", "--output-dir=."], work_dir)
-            raw = work_dir / f"Dif_{repaired.stem}_{tag}.fxout"
-            if res.returncode != 0 or not raw.exists():
-                log.error("FoldX BuildModel failed for chunk %s: %s", tag, res.stdout[-1500:])
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [(chunk, pool.submit(_build_chunk, binary, repaired, work_dir, chain, tag, chunk, number_of_runs))
+                   for tag, chunk in chunks]
+        for chunk, fut in futures:
+            dif = fut.result()
+            if dif is None:
                 continue
-            # remove bulky mutant/WT model PDBs that BuildModel writes
-            for p in work_dir.glob(f"*{repaired.stem}_{tag}*.pdb"):
-                p.unlink()
-        for (pos, wt, mut), ddg in zip(chunk, _parse_dif(dif, number_of_runs)):
-            results[(pos, wt, mut)] = ddg
+            for (pos, wt, mut), ddg in zip(chunk, _parse_dif(dif, number_of_runs)):
+                results[(pos, wt, mut)] = ddg
     rows = [{"position": p, "wt": w, "mut": m, "foldx": results.get((p, w, m))} for p, w, m in muts]
     return pd.DataFrame(rows, columns=FOLDX_COLUMNS)
 

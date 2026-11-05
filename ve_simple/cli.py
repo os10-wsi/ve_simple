@@ -20,11 +20,15 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--device", default="auto", help="torch device for ESM-1v/SaProt: auto|cpu|cuda|mps")
     p.add_argument("--batch-size", type=int, default=None, help="masked positions per forward pass")
     p.add_argument("--esm1v-models", type=int, default=5, help="number of ESM-1v ensemble members (1-5)")
-    p.add_argument("--skip", default="", help="comma-separated predictors to skip, e.g. esm1v,saprot,foldx")
+    p.add_argument("--skip", default="",
+                   help="comma-separated predictors not to compute (cached scores from earlier runs are still used), "
+                        "e.g. esm1v,saprot,foldx")
     p.add_argument("--foldx-binary", default=None, help="path to the FoldX executable (or set FOLDX_BINARY)")
     p.add_argument("--foldx-scope", choices=["all", "clinvar"], default="all",
                    help="run FoldX on every position (default) or only positions with ClinVar variants")
     p.add_argument("--foldx-chunk", type=int, default=200, help="mutants per FoldX BuildModel call")
+    p.add_argument("--foldx-workers", type=int, default=1,
+                   help="FoldX processes to run in parallel per protein (FoldX itself is single-threaded)")
     p.add_argument("--no-thermompnn-download", action="store_true", help="do not download the Zenodo archive")
     p.add_argument("--no-thermompnn-compute", action="store_true", help="never run ThermoMPNN de novo")
     p.add_argument("--bootstrap", type=int, default=1000, help="bootstrap resamples for AUC confidence intervals")
@@ -53,7 +57,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = Config(
         ids=ids, out_dir=args.out, cache_dir=args.cache, data_dir=args.data_dir, external_dir=args.external_dir,
         device=args.device, esm1v_models=args.esm1v_models, batch_size=args.batch_size, skip=skip,
-        foldx_binary=args.foldx_binary, foldx_chunk=args.foldx_chunk, foldx_scope=args.foldx_scope,
+        foldx_binary=args.foldx_binary, foldx_chunk=args.foldx_chunk, foldx_workers=args.foldx_workers, foldx_scope=args.foldx_scope,
         thermompnn_download=not args.no_thermompnn_download, thermompnn_compute=not args.no_thermompnn_compute,
         n_boot=args.bootstrap, min_per_class=args.min_per_class, include_likely=not args.strict_labels,
         force=args.force,

@@ -45,6 +45,7 @@ class Config:
     skip: set[str] = field(default_factory=set)       # predictor names to skip
     foldx_binary: Optional[str] = None
     foldx_chunk: int = 200
+    foldx_workers: int = 1                             # parallel FoldX processes per protein
     foldx_scope: str = "all"                           # all | clinvar
     thermompnn_download: bool = True
     thermompnn_compute: bool = True
@@ -187,7 +188,9 @@ def stage_simple(cfg: Config, states: list[ProteinState]) -> None:
 def stage_thermompnn(cfg: Config, states: list[ProteinState]) -> None:
     if "thermompnn" in cfg.skip:
         for st in states:
-            st.variants = _merge(st.variants, None, ["thermompnn"])
+            df = _load_cached(cfg, st.acc, "thermompnn")
+            st.notes["thermompnn_source"] = df["thermompnn_source"].iloc[0] if df is not None and len(df) else "skipped"
+            st.variants = _merge(st.variants, df, ["thermompnn"])
         return
     zen = tm_mod.ZenodoThermoMPNN(cfg.data_dir)
     archive = zen.ensure_archive(download=cfg.thermompnn_download)
@@ -229,7 +232,7 @@ def stage_esm1v(cfg: Config, states: list[ProteinState]) -> None:
     col = "esm1v"
     if col in cfg.skip:
         for st in states:
-            st.variants = _merge(st.variants, None, [col])
+            st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "esm1v"), [col, "esm1v_n_models"])
         return
     n_models = max(1, min(5, cfg.esm1v_models))
     todo = [st for st in states if _load_cached(cfg, st.acc, "esm1v") is None]
@@ -268,7 +271,7 @@ def stage_saprot(cfg: Config, states: list[ProteinState]) -> None:
     col = "saprot"
     if col in cfg.skip:
         for st in states:
-            st.variants = _merge(st.variants, None, [col])
+            st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "saprot"), [col])
         return
     scorer = None
     for st in states:
@@ -308,7 +311,8 @@ def stage_foldx(cfg: Config, states: list[ProteinState]) -> None:
             try:
                 log.info("%s: FoldX BuildModel (%s positions)", st.acc, "all" if positions is None else len(positions))
                 df = foldx_mod.foldx_saturation(binary, st.pdb, Path(cfg.cache_dir) / st.acc / "foldx",
-                                                chunk_size=cfg.foldx_chunk, positions=positions)
+                                                chunk_size=cfg.foldx_chunk, positions=positions,
+                                                workers=cfg.foldx_workers)
                 _save_cache(cfg, st.acc, "foldx", df)
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"foldx: {e}")
