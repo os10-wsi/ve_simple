@@ -103,8 +103,10 @@ def roc_pdf(variants: pd.DataFrame, proteins: pd.DataFrame, out_pdf: Path,
                 _panel(ax, sub, title, predictors)
             for ax in axes[len(chunk):]:
                 ax.axis("off")
-            fig.suptitle("ROC curves: ClinVar pathogenic vs benign (AUC in legend, scores oriented so higher = pathogenic)",
-                         fontsize=8, color=TEXT2, x=0.01, ha="left")
+            title = "ROC: ClinVar pathogenic vs benign (AUC in legend)"
+            if cols >= 2:
+                title += "; scores oriented so that higher = more pathogenic"
+            fig.suptitle(title, fontsize=8, color=TEXT2, x=0.01, ha="left")
             fig.tight_layout(rect=(0, 0, 1, 0.97))
             pdf.savefig(fig)
             plt.close(fig)

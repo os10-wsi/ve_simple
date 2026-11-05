@@ -55,7 +55,10 @@ Optional:
 * **Foldseek** (3Di tokens for SaProt). The pure-Python `mini3di` port is used by default; if a
   `foldseek` binary is on PATH (or `VE_SIMPLE_FOLDSEEK` is set) it is used instead.
 * A GPU is strongly recommended for ESM-1v and SaProt (650M parameters each; every position of
-  every protein needs one masked forward pass). On CPU use `--esm1v-models 1` and expect minutes per protein.
+  every protein needs one masked forward pass). On a 4-core CPU with `--batch-size 8` each model
+  takes roughly 2.5 s per residue (about 6 min per model for a 150-residue protein), so for CPU
+  runs use `--esm1v-models 1` or `--skip esm1v,saprot`. Sequences longer than 1022 residues are
+  scored in a sliding 1022-residue window centred on each position.
 
 ## Usage
 
@@ -94,6 +97,24 @@ All AUCs are computed on scores oriented so that higher means more pathogenic (s
 above), so every value above 0.5 means better-than-random discrimination. An AUC is reported
 whenever a protein has at least `--min-per-class` pathogenic and benign variants with a score for
 that predictor; otherwise the fields are empty.
+
+## Notes and limitations
+
+* The ClinVar annotations come from the EBI Proteins API rather than directly from NCBI, so a
+  variant appears only once UniProt/EBI have mapped it onto the protein; releases lag ClinVar by
+  a few weeks.
+* ClinVar variants whose reported wild-type residue does not match the UniProt canonical sequence
+  (isoform-specific annotations) cannot be scored and are counted in `proteins.tsv` but excluded
+  from AUCs.
+* The de novo ThermoMPNN route runs the upstream `custom_inference.py` in a subprocess on the
+  AlphaFold model (chain A); it needs `torch`, `pytorch-lightning` and `omegaconf` (installed by
+  this package) and the checkpoint shipped with the ThermoMPNN repository. Human proteins are
+  almost always covered by the Zenodo archive, so this route is mainly used for non-human proteins.
+* FoldX runs BuildModel for every substitution; at roughly one to several seconds per mutant a
+  400-residue protein takes hours. `--foldx-scope clinvar` limits FoldX to positions that carry
+  ClinVar variants, which is all that the AUC benchmark needs.
+* AUCs use all ClinVar missense variants with a pathogenic/benign label, irrespective of review
+  status; the review status and RCV accessions are kept in `variant_scores.tsv` for filtering.
 
 ## Tests
 
