@@ -102,14 +102,28 @@ def masked_marginals(
             base_ids = tokenizer.convert_tokens_to_ids(ctx)
             cls_id, eos_id = tokenizer.cls_token_id, tokenizer.eos_token_id
             base = [cls_id] + base_ids + [eos_id]
-            for b in range(0, len(plist), batch_size):
-                chunk = plist[b:b + batch_size]
+            b = 0
+            cur_batch = batch_size
+            while b < len(plist):
+                chunk = plist[b:b + cur_batch]
                 ids = torch.tensor([base] * len(chunk), dtype=torch.long)
                 for r, p in enumerate(chunk):
                     ids[r, p - start + 1] = tokenizer.convert_tokens_to_ids(mask_token_for(p))
-                ids = ids.to(device)
-                logits = model(input_ids=ids).logits
-                logp = torch.log_softmax(logits.float(), dim=-1)
+                try:
+                    ids = ids.to(device)
+                    logits = model(input_ids=ids).logits
+                    logp = torch.log_softmax(logits.float(), dim=-1)
+                except torch.OutOfMemoryError:
+                    # GPU memory pressure (e.g. a shared card): free what we can and retry smaller
+                    del ids
+                    if device.startswith("cuda"):
+                        torch.cuda.empty_cache()
+                    if cur_batch == 1:
+                        raise
+                    cur_batch = max(1, cur_batch // 2)
+                    log.warning("CUDA out of memory; retrying with batch size %d", cur_batch)
+                    continue
+                b += len(chunk)
                 for r, p in enumerate(chunk):
                     row = logp[r, p - start + 1]
                     key = tuple(token_for(p, aa) for aa in AMINO_ACIDS)

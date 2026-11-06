@@ -98,20 +98,29 @@ class ScorerPool:
             old.close()
             del self._scorers[old_key]
 
+    def _load(self, key: str, factory):
+        """Load a scorer; on CUDA out-of-memory, drop every resident model and try once more."""
+        import torch
+        if key in self._scorers:
+            return self._scorers[key]
+        self._evict_for(key)
+        try:
+            self._scorers[key] = factory()
+        except torch.OutOfMemoryError:
+            log.warning("CUDA out of memory while loading %s; unloading other models and retrying", key)
+            self.close()
+            torch.cuda.empty_cache()
+            self._scorers[key] = factory()
+        return self._scorers[key]
+
     def esm1v(self, model_name: str):
         from .predictors import esm1v as esm_mod
-        if model_name not in self._scorers:
-            self._evict_for(model_name)
-            self._scorers[model_name] = esm_mod.ESM1vScorer(model_name, device=self.cfg.device,
-                                                            batch_size=self.cfg.batch_size)
-        return self._scorers[model_name]
+        return self._load(model_name, lambda: esm_mod.ESM1vScorer(model_name, device=self.cfg.device,
+                                                                  batch_size=self.cfg.batch_size))
 
     def saprot(self):
         from .predictors import saprot as sp_mod
-        if "saprot" not in self._scorers:
-            self._evict_for("saprot")
-            self._scorers["saprot"] = sp_mod.SaProtScorer(device=self.cfg.device, batch_size=self.cfg.batch_size)
-        return self._scorers["saprot"]
+        return self._load("saprot", lambda: sp_mod.SaProtScorer(device=self.cfg.device, batch_size=self.cfg.batch_size))
 
     def close(self) -> None:
         for sc in self._scorers.values():
@@ -311,8 +320,14 @@ def stage_esm1v(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> No
     for st in states:
         df = _load_cached(cfg, st.acc, "esm1v")
         if df is None and per_model.get(st.acc):
-            df = esm_mod.esm1v_frame(per_model[st.acc], st.entry.sequence)
-            _save_cache(cfg, st.acc, "esm1v", df)
+            if len(per_model[st.acc]) == n_models:
+                df = esm_mod.esm1v_frame(per_model[st.acc], st.entry.sequence)
+                _save_cache(cfg, st.acc, "esm1v", df)
+            else:
+                # incomplete ensemble (a model failed): report nothing and keep the per-model
+                # matrices so that a re-run only computes the missing member(s)
+                log.error("%s: ESM-1v ensemble incomplete (%d/%d models); not cached",
+                          st.acc, len(per_model[st.acc]), n_models)
         st.variants = _merge(st.variants, df, [col, "esm1v_n_models"])
 
 
