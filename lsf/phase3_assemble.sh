@@ -6,6 +6,7 @@ IDS=${1:?id list}
 OUT=${2:-results_final}
 QUEUE=${CPU_QUEUE:-normal}
 mkdir -p lsf/logs
-bsub -q "$QUEUE" -J ve_assemble -n 2 -M 16000 -R "select[mem>16000] rusage[mem=16000]" \
-     -o lsf/logs/assemble.out -e lsf/logs/assemble.err \
+TAG=$(basename "$IDS"); TAG=${TAG%.*}
+bsub -q "$QUEUE" -J "ve_assemble_${TAG}" -n 2 -M 16000 -R "select[mem>16000] rusage[mem=16000]" \
+     -o "lsf/logs/assemble_${TAG}.out" -e "lsf/logs/assemble_${TAG}.err" \
      "source .venv/bin/activate && ve-simple run --ids $IDS --out $OUT --skip esm1v,saprot,foldx,thermompnn --no-thermompnn-download --bootstrap 2000"

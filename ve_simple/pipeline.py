@@ -6,6 +6,7 @@ Every per-protein intermediate is cached under `cache/<accession>/` and re-used 
 from __future__ import annotations
 
 import logging
+import os
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from . import alphafold, clinvar, uniprot
+from . import alphafold, cachecheck, clinvar, uniprot
 from .constants import PREDICTOR_DIRECTIONS
 from .db import ResultsDB
 from .evaluate import auc_for_protein, wide_auc_table
@@ -132,17 +133,44 @@ def _cache_path(cfg: Config, acc: str, name: str) -> Path:
     return Path(cfg.cache_dir) / acc / f"scores_{name}.tsv"
 
 
-def _load_cached(cfg: Config, acc: str, name: str) -> Optional[pd.DataFrame]:
+def _load_cached(cfg: Config, acc: str, name: str, sequence: Optional[str] = None) -> Optional[pd.DataFrame]:
+    """Read a cached score table; a broken file (truncated by a killed or duplicate job) is
+    removed and treated as missing so that it is recomputed."""
     p = _cache_path(cfg, acc, name)
-    if p.exists() and not cfg.force:
-        return pd.read_csv(p, sep="\t")
-    return None
+    if not p.exists() or cfg.force:
+        return None
+    problem = cachecheck.check_score_table(p, sequence)
+    if problem:
+        log.warning("%s: discarding cached %s (%s)", acc, p.name, problem)
+        p.unlink()
+        return None
+    return pd.read_csv(p, sep="\t")
 
 
 def _save_cache(cfg: Config, acc: str, name: str, df: pd.DataFrame) -> None:
+    """Write atomically so that a concurrent reader never sees a partial file."""
     p = _cache_path(cfg, acc, name)
     p.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(p, sep="\t", index=False)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    df.to_csv(tmp, sep="\t", index=False)
+    os.replace(tmp, p)
+
+
+def _load_npy(path: Path, sequence: str) -> Optional[np.ndarray]:
+    if not path.exists():
+        return None
+    problem = cachecheck.check_npy(path, sequence)
+    if problem:
+        log.warning("discarding cached %s (%s)", path, problem)
+        path.unlink()
+        return None
+    return np.load(path)
+
+
+def _save_npy(path: Path, mat: np.ndarray) -> None:
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp.npy")
+    np.save(tmp, mat)
+    os.replace(tmp, path)
 
 
 def _merge(variants: pd.DataFrame, df: Optional[pd.DataFrame], cols: list[str], on=VARIANT_KEY) -> pd.DataFrame:
@@ -297,28 +325,29 @@ def stage_esm1v(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> No
     col = "esm1v"
     if col in cfg.skip:
         for st in states:
-            st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "esm1v"), [col, "esm1v_n_models"])
+            st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "esm1v", st.entry.sequence), [col, "esm1v_n_models"])
         return
     n_models = max(1, min(5, cfg.esm1v_models))
-    todo = [st for st in states if _load_cached(cfg, st.acc, "esm1v") is None]
+    todo = [st for st in states if _load_cached(cfg, st.acc, "esm1v", st.entry.sequence) is None]
     per_model: dict[str, list[np.ndarray]] = {st.acc: [] for st in todo}
     for mi, name in enumerate(esm_mod.ESM1V_MODELS[:n_models]):
         for st in todo:
             npy = Path(cfg.cache_dir) / st.acc / f"esm1v_{mi + 1}.npy"
-            if npy.exists() and not cfg.force:
-                per_model[st.acc].append(np.load(npy))
+            cached = None if cfg.force else _load_npy(npy, st.entry.sequence)
+            if cached is not None:
+                per_model[st.acc].append(cached)
                 continue
             scorer = pool.esm1v(name)
             try:
                 log.info("%s: ESM-1v model %d/%d (%d positions)", st.acc, mi + 1, n_models, len(st.entry.sequence))
                 mat = scorer.score_matrix(st.entry.sequence)
-                np.save(npy, mat)
+                _save_npy(npy, mat)
                 per_model[st.acc].append(mat)
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"esm1v: {e}")
                 log.error("%s: ESM-1v failed: %s\n%s", st.acc, e, traceback.format_exc())
     for st in states:
-        df = _load_cached(cfg, st.acc, "esm1v")
+        df = _load_cached(cfg, st.acc, "esm1v", st.entry.sequence)
         if df is None and per_model.get(st.acc):
             if len(per_model[st.acc]) == n_models:
                 df = esm_mod.esm1v_frame(per_model[st.acc], st.entry.sequence)

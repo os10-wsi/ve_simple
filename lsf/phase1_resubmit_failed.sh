@@ -1,23 +1,24 @@
 #!/bin/bash
-# Resubmit only the phase-1 chunks that did not finish (no summary.json in their results dir).
-# Usage:  bash lsf/phase1_resubmit_failed.sh        (after the original phase1_gpu.sh submission)
+# Resubmit only the phase-1 chunks of one ID file that did not finish (no summary.json).
+# Usage:  bash lsf/phase1_resubmit_failed.sh all_ids.txt
 set -euo pipefail
+IDS=${1:?id list (same file given to phase1_gpu.sh)}
 QUEUE=${GPU_QUEUE:-gpu}
+MEM=${HOST_MEM:-24000}
+TAG=$(basename "$IDS"); TAG=${TAG%.*}
+CHUNKS="lsf/chunks/${TAG}"
+[ -d "$CHUNKS" ] || { echo "no chunks for $TAG; run phase1_gpu.sh first"; exit 1; }
 n_sub=0
-for f in lsf/chunks/ids_*; do
+for f in "$CHUNKS"/ids_*; do
   n=$(basename "$f")
-  if [ -f "results_phase1/${n}/summary.json" ]; then
-    continue
+  [ -f "results_phase1/${TAG}/${n}/summary.json" ] && continue
+  if bjobs -noheader -J "ve_${TAG}_${n}" 2>/dev/null | grep -qE "RUN|PEND"; then
+    echo "${TAG}_${n}: still queued/running, skipping"; continue
   fi
-  if bjobs -noheader -J "ve_${n}" 2>/dev/null | grep -qE "RUN|PEND"; then
-    echo "${n}: still queued/running, skipping"
-    continue
-  fi
-  mv -f "lsf/logs/${n}.err" "lsf/logs/${n}.err.prev" 2>/dev/null || true
-  mv -f "lsf/logs/${n}.out" "lsf/logs/${n}.out.prev" 2>/dev/null || true
-  bsub -q "$QUEUE" -J "ve_${n}" -n 4 -M 12000 -R "select[mem>12000] rusage[mem=12000]" \
-       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${n}.out" -e "lsf/logs/${n}.err" \
-       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${n} --device cuda --skip foldx --no-thermompnn-download --no-pdf"
+  for ext in out err; do mv -f "lsf/logs/${TAG}_${n}.${ext}" "lsf/logs/${TAG}_${n}.${ext}.prev" 2>/dev/null || true; done
+  bsub -q "$QUEUE" -J "ve_${TAG}_${n}" -n 4 -M "$MEM" -R "select[mem>$MEM] rusage[mem=$MEM]" \
+       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${TAG}_${n}.out" -e "lsf/logs/${TAG}_${n}.err" \
+       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${TAG}/${n} --device cuda --skip foldx --no-thermompnn-download --no-pdf"
   n_sub=$((n_sub + 1))
 done
-echo "resubmitted ${n_sub} chunk(s)"
+echo "resubmitted ${n_sub} chunk(s) for ${TAG}"

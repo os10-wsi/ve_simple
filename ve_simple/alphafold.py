@@ -65,7 +65,9 @@ def fetch_alphamissense(acc: str, cache_dir: Path, meta: Optional[dict] = None) 
         log.warning("AlphaMissense table unavailable for %s (HTTP %s)", acc, r.status_code)
         dest.write_bytes(b"")
         return None
-    dest.write_bytes(r.content)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(r.content)
+    tmp.replace(dest)
     return dest
 
 

@@ -133,6 +133,20 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_cache(args: argparse.Namespace) -> int:
+    from .cachecheck import check_cache
+
+    accs = read_id_list(args.ids) if args.ids else None
+    problems = check_cache(args.cache, delete=args.delete, accessions=accs)
+    by_acc = {}
+    for path, _ in problems:
+        by_acc.setdefault(path.parent.name, 0)
+        by_acc[path.parent.name] += 1
+    print(f"{len(problems)} problem file(s) in {len(by_acc)} accession(s)" + (" deleted" if args.delete else
+          " found; re-run with --delete to remove them so they are recomputed"))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="ve-simple", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -153,6 +167,12 @@ def main(argv=None) -> int:
     p_e.add_argument("--no-pdf", action="store_true")
     p_e.add_argument("-v", "--verbose", action="store_true")
     p_e.set_defaults(func=cmd_evaluate)
+    p_c = sub.add_parser("check-cache", help="find (and with --delete remove) truncated or unreadable cache files")
+    p_c.add_argument("--cache", type=Path, default=Path("cache"))
+    p_c.add_argument("--ids", type=Path, default=None, help="restrict to these accessions (default: whole cache)")
+    p_c.add_argument("--delete", action="store_true")
+    p_c.add_argument("-v", "--verbose", action="store_true")
+    p_c.set_defaults(func=cmd_check_cache)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")

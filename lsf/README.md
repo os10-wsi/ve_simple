@@ -19,6 +19,12 @@ directory (or pass the same `--cache`, `--data-dir` and `--external-dir`) so tha
 4. **Phase 3, assembly** (`lsf/phase3_assemble.sh`): one short job that reads the cache, builds the
    combined tables, database, AUC statistics and ROC PDF.
 
+Chunk files, job names, logs and `results_phase*` directories are namespaced by the ID file's basename
+(e.g. `uniprot_reviewed_9606`), so different proteomes can be submitted independently. Chunks that
+failed can be resubmitted with `bash lsf/phase1_resubmit_failed.sh all_ids.txt`. If jobs were ever
+killed or duplicated, run `ve-simple check-cache --delete` before resubmitting: it removes cache
+files that are unreadable or incomplete so they are recomputed.
+
 Edit the queue names, project, and module/venv lines at the top of each script for your cluster.
 
 ## Proteome-scale runs (e.g. all reviewed human and yeast proteins)
