@@ -39,6 +39,9 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--batch-proteins", type=int, default=25,
                    help="proteins processed together per stage (bounds memory; models stay loaded across batches)")
     p.add_argument("--no-pdf", action="store_true", help="skip the ROC PDF (useful for proteome-scale runs)")
+    p.add_argument("--cache-only", action="store_true",
+                   help="compute and cache scores but write only proteins.tsv and summary.json "
+                        "(for cluster chunks; the full tables are built afterwards by the assembly step)")
     p.add_argument("--force", action="store_true", help="recompute cached predictor scores")
     p.add_argument("-v", "--verbose", action="store_true")
 
@@ -76,6 +79,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         thermompnn_download=not args.no_thermompnn_download, thermompnn_compute=not args.no_thermompnn_compute,
         n_boot=args.bootstrap, min_per_class=args.min_per_class, include_likely=not args.strict_labels,
         force=args.force, batch_proteins=max(1, args.batch_proteins), make_pdf=not args.no_pdf,
+        cache_only=args.cache_only,
     )
     if args.plot_predictors:
         cfg.plot_predictors = [s.strip() for s in args.plot_predictors.split(",") if s.strip()]
@@ -95,8 +99,8 @@ def cmd_fetch_zenodo(args: argparse.Namespace) -> int:
     idx = zen.build_index(force=args.reindex)
     print(f"Archive: {zen.archive}\nProteins indexed: {len(idx)}")
     if args.extract_all:
-        zen.extract_all()
-        print(f"Extracted to {zen.extract_dir}")
+        print("--extract-all is no longer needed (the archive is read directly) and is ignored; "
+              f"if {zen.extract_dir} exists you can delete it.")
     return 0
 
 
@@ -147,6 +151,37 @@ def cmd_check_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_foldx(args: argparse.Namespace) -> int:
+    from .pipeline import Config, run_foldx_only
+    from .predictors.foldx import find_foldx
+
+    ids = read_id_list(args.ids) if args.ids else []
+    ids += [normalise_accession(a) for a in args.id_list]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        print("No UniProt IDs given (use --ids FILE or --id ACC ...)", file=sys.stderr)
+        return 2
+    if find_foldx(args.foldx_binary) is None:
+        print("FoldX binary not found: pass --foldx-binary or set FOLDX_BINARY", file=sys.stderr)
+        return 2
+    cfg = Config(ids=ids, cache_dir=args.cache, foldx_binary=args.foldx_binary, foldx_chunk=args.foldx_chunk,
+                 foldx_workers=args.foldx_workers, foldx_scope=args.foldx_scope, batch_proteins=10)
+    res = run_foldx_only(cfg)
+    return 0 if res["failed"] == 0 else 1
+
+
+def cmd_compact_cache(args: argparse.Namespace) -> int:
+    from .cachecheck import compact_cache
+
+    accs = read_id_list(args.ids) if args.ids else None
+    counts = compact_cache(args.cache, data_dir=args.data_dir, accessions=accs, dry_run=args.dry_run,
+                           remove_zenodo_extracted=args.remove_zenodo_extracted)
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"{verb} {counts['files_removed']} file(s); converted {counts['clinvar_converted']} ClinVar record(s); "
+          f"{counts['thermompnn_reset']} multi-fragment ThermoMPNN table(s) reset for rebuilding")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="ve-simple", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -156,7 +191,7 @@ def main(argv=None) -> int:
     p_z = sub.add_parser("fetch-zenodo", help="download and index the proteome-wide ThermoMPNN archive")
     p_z.add_argument("--data-dir", type=Path, default=Path("data/zenodo"))
     p_z.add_argument("--reindex", action="store_true")
-    p_z.add_argument("--extract-all", action="store_true")
+    p_z.add_argument("--extract-all", action="store_true", help="ignored (kept for old instructions)")
     p_z.add_argument("-v", "--verbose", action="store_true")
     p_z.set_defaults(func=cmd_fetch_zenodo)
     p_e = sub.add_parser("evaluate", help="recompute AUC tables and ROC plots from an existing results directory")
@@ -173,6 +208,25 @@ def main(argv=None) -> int:
     p_c.add_argument("--delete", action="store_true")
     p_c.add_argument("-v", "--verbose", action="store_true")
     p_c.set_defaults(func=cmd_check_cache)
+    p_f = sub.add_parser("foldx", help="run FoldX only, writing to the cache (for cluster job arrays)")
+    p_f.add_argument("--ids", type=Path)
+    p_f.add_argument("--id", dest="id_list", nargs="*", default=[])
+    p_f.add_argument("--cache", type=Path, default=Path("cache"))
+    p_f.add_argument("--foldx-binary", default=None)
+    p_f.add_argument("--foldx-scope", choices=["all", "clinvar"], default="all")
+    p_f.add_argument("--foldx-chunk", type=int, default=200)
+    p_f.add_argument("--foldx-workers", type=int, default=1)
+    p_f.add_argument("-v", "--verbose", action="store_true")
+    p_f.set_defaults(func=cmd_foldx)
+    p_k = sub.add_parser("compact-cache", help="delete redundant cache files to reduce the file count")
+    p_k.add_argument("--cache", type=Path, default=Path("cache"))
+    p_k.add_argument("--data-dir", type=Path, default=Path("data/zenodo"))
+    p_k.add_argument("--ids", type=Path, default=None, help="restrict to these accessions (default: whole cache)")
+    p_k.add_argument("--remove-zenodo-extracted", action="store_true",
+                     help="also delete the unpacked archive under <data-dir>/thermompnn_outs (~20,000 files)")
+    p_k.add_argument("--dry-run", action="store_true")
+    p_k.add_argument("-v", "--verbose", action="store_true")
+    p_k.set_defaults(func=cmd_compact_cache)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")

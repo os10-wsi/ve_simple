@@ -7,13 +7,14 @@ classifications whose source list includes ClinVar are used.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 from .constants import AMINO_ACIDS
-from .utils import http_get, read_json, write_json
+from .utils import http_get, read_json
 
 log = logging.getLogger(__name__)
 
@@ -37,18 +38,47 @@ CLINVAR_COLUMNS = ["accession", "position", "wt", "mut", "clinvar_class", "clinv
                    "clinvar_significances", "clinvar_review_status", "clinvar_ids"]
 
 
-def fetch_variation(acc: str, cache_dir: Path) -> Optional[dict]:
-    cache = Path(cache_dir) / acc / "ebi_variation.json"
-    if cache.exists():
-        return read_json(cache)
+def fetch_variation(acc: str, cache_dir: Optional[Path] = None) -> Optional[dict]:
+    """Raw EBI Proteins API variation record (not cached: only the parsed table is kept)."""
+    if cache_dir is not None:
+        legacy = Path(cache_dir) / acc / LEGACY_JSON
+        if legacy.exists():
+            return read_json(legacy)
     r = http_get(VARIATION_API.format(acc=acc), headers={"Accept": "application/json"}, timeout=300)
     if r.status_code == 404:
-        write_json({}, cache)
         return None
     r.raise_for_status()
-    d = r.json()
-    write_json(d, cache)
-    return d
+    return r.json()
+
+
+LEGACY_JSON = "ebi_variation.json"
+CACHE_TSV = "clinvar.tsv"
+
+
+def load_clinvar(acc: str, cache_dir: Path) -> pd.DataFrame:
+    """Parsed ClinVar missense table for `acc`, cached as one small TSV per protein.
+
+    A raw `ebi_variation.json` left by older versions is converted and removed.
+    """
+    d = Path(cache_dir) / acc
+    tsv = d / CACHE_TSV
+    if tsv.exists():
+        try:
+            df = pd.read_csv(tsv, sep="\t", dtype={"clinvar_ids": str, "clinvar_review_status": str,
+                                                  "clinvar_significances": str})
+            if set(CLINVAR_COLUMNS) <= set(df.columns):
+                return df[CLINVAR_COLUMNS]
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s: discarding unreadable %s (%s)", acc, tsv, e)
+        tsv.unlink(missing_ok=True)
+    data = fetch_variation(acc, cache_dir)
+    df = parse_clinvar_missense(acc, data)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = tsv.with_name(f"{tsv.name}.{os.getpid()}.tmp")
+    df.to_csv(tmp, sep="\t", index=False)
+    os.replace(tmp, tsv)
+    (d / LEGACY_JSON).unlink(missing_ok=True)
+    return df
 
 
 def _coarse_class(sig: str) -> str:

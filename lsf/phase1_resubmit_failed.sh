@@ -15,10 +15,10 @@ for f in "$CHUNKS"/ids_*; do
   if bjobs -noheader -J "ve_${TAG}_${n}" 2>/dev/null | grep -qE "RUN|PEND"; then
     echo "${TAG}_${n}: still queued/running, skipping"; continue
   fi
-  for ext in out err; do mv -f "lsf/logs/${TAG}_${n}.${ext}" "lsf/logs/${TAG}_${n}.${ext}.prev" 2>/dev/null || true; done
+  rm -f "lsf/logs/${TAG}_${n}.log" "lsf/logs/${TAG}_${n}.out" "lsf/logs/${TAG}_${n}.err"
   bsub -q "$QUEUE" -J "ve_${TAG}_${n}" -n 4 -M "$MEM" -R "select[mem>$MEM] rusage[mem=$MEM]" \
-       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${TAG}_${n}.out" -e "lsf/logs/${TAG}_${n}.err" \
-       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${TAG}/${n} --device cuda --skip foldx --no-thermompnn-download --no-pdf"
+       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${TAG}_${n}.log" \
+       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${TAG}/${n} --device cuda --skip foldx --no-thermompnn-download --cache-only"
   n_sub=$((n_sub + 1))
 done
 echo "resubmitted ${n_sub} chunk(s) for ${TAG}"

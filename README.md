@@ -24,7 +24,8 @@ ThermoMPNN predictions come from two sources, in order:
 1. the human proteome-wide ThermoMPNN run released with Liao & Lehner (2026),
    [Zenodo record 18381534](https://zenodo.org/records/18381534) (`thermompnn_outs.tar.gz`, 3.3 GB).
    The archive is downloaded automatically into `data/zenodo/` (or run `ve-simple fetch-zenodo`),
-   indexed once, and the files for the requested proteins are extracted in a single streaming pass;
+   indexed once, and read in a single streaming pass per run; predictions go straight into the
+   per-protein cache, so the archive is never unpacked;
 2. otherwise (non-human proteins or proteins missing from the archive) ThermoMPNN is run on the
    AlphaFold model with the official code (cloned automatically into `external/ThermoMPNN`).
 

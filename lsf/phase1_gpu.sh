@@ -19,6 +19,6 @@ echo "$(wc -l < "$CHUNKS/all_ids.txt") accessions in $(ls "$CHUNKS"/ids_* | wc -
 for f in "$CHUNKS"/ids_*; do
   n=$(basename "$f")
   bsub -q "$QUEUE" -J "ve_${TAG}_${n}" -n 4 -M "$MEM" -R "select[mem>$MEM] rusage[mem=$MEM]" \
-       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${TAG}_${n}.out" -e "lsf/logs/${TAG}_${n}.err" \
-       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${TAG}/${n} --device cuda --skip foldx --no-thermompnn-download --no-pdf"
+       -gpu "${GPU_REQ:-num=1:mode=shared:j_exclusive=yes}" -o "lsf/logs/${TAG}_${n}.log" \
+       "source .venv/bin/activate && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && ve-simple run --ids $f --out results_phase1/${TAG}/${n} --device cuda --skip foldx --no-thermompnn-download --cache-only"
 done

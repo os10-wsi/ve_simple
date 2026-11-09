@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +56,7 @@ class Config:
     include_likely: bool = True
     plot_predictors: list[str] = field(default_factory=lambda: list(DEFAULT_PLOT_PREDICTORS))
     make_pdf: bool = True
+    cache_only: bool = False                           # compute + cache scores; write only proteins.tsv/summary.json
     batch_proteins: int = 25                           # proteins processed together per stage
     force: bool = False
 
@@ -156,6 +158,15 @@ def _save_cache(cfg: Config, acc: str, name: str, df: pd.DataFrame) -> None:
     os.replace(tmp, p)
 
 
+def remove_esm1v_matrices(acc_dir: Path) -> int:
+    """Per-model ESM-1v matrices are only needed until the ensemble table is written."""
+    n = 0
+    for p in acc_dir.glob("esm1v_*.npy"):
+        p.unlink(missing_ok=True)
+        n += 1
+    return n
+
+
 def _load_npy(path: Path, sequence: str) -> Optional[np.ndarray]:
     if not path.exists():
         return None
@@ -228,8 +239,7 @@ def stage_fetch(cfg: Config, ids: Optional[list[str]] = None) -> list[ProteinSta
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"alphamissense: {e}")
             try:
-                data = clinvar.fetch_variation(entry.accession, cfg.cache_dir)
-                df = clinvar.parse_clinvar_missense(entry.accession, data)
+                df = clinvar.load_clinvar(entry.accession, cfg.cache_dir)
                 df["clinvar_label"] = [clinvar.class_to_label(c, cfg.include_likely) for c in df["clinvar_class"]]
                 st.clinvar_df = df
             except Exception as e:  # noqa: BLE001
@@ -270,16 +280,20 @@ def stage_simple(cfg: Config, states: list[ProteinState]) -> None:
 
 # ---------------------------------------------------------------------- stage 3: ThermoMPNN
 def prepare_thermompnn_archive(cfg: Config) -> Optional[tm_mod.ZenodoThermoMPNN]:
-    """Download/index the Zenodo archive and extract every requested protein in ONE streaming pass."""
+    """Download/index the Zenodo archive and copy every requested protein's predictions straight
+    into its cache table, in ONE streaming pass and without unpacking the archive."""
     if "thermompnn" in cfg.skip:
         return None
     zen = tm_mod.ZenodoThermoMPNN(cfg.data_dir)
     if zen.ensure_archive(download=cfg.thermompnn_download) is None:
         return None
     zen.build_index()
-    todo = [acc for acc in cfg.ids if _load_cached(cfg, acc, "thermompnn") is None]
+    todo = [acc for acc in cfg.ids if zen.available(acc) and _load_cached(cfg, acc, "thermompnn") is None]
     if todo:
-        zen.extract(todo)
+        def sink(acc: str, df: pd.DataFrame) -> None:
+            df["thermompnn_source"] = "zenodo:18381534"
+            _save_cache(cfg, acc, "thermompnn", df)
+        zen.stream(todo, sink)
     return zen
 
 
@@ -290,31 +304,28 @@ def stage_thermompnn(cfg: Config, states: list[ProteinState], zen: Optional[tm_m
             st.notes["thermompnn_source"] = df["thermompnn_source"].iloc[0] if df is not None and len(df) else "skipped"
             st.variants = _merge(st.variants, df, ["thermompnn"])
         return
-    archive = zen.archive if zen is not None and zen.archive.exists() else None
     for st in states:
         df = _load_cached(cfg, st.acc, "thermompnn")
-        source = st.notes.get("thermompnn_source")
-        if df is None and archive is not None and zen.available(st.acc):
-            try:
-                df = zen.load(st.acc, st.entry.sequence)
-                source = "zenodo:18381534"
-            except Exception as e:  # noqa: BLE001
-                st.errors.append(f"thermompnn_zenodo: {e}")
-                log.error("%s: could not read Zenodo ThermoMPNN file: %s", st.acc, e)
+        if df is not None and len(df):
+            agree = tm_mod.wt_agreement(df, st.entry.sequence)
+            if agree < 0.9:
+                st.notes["thermompnn_wt_agreement"] = round(agree, 3)
+                log.warning("%s: ThermoMPNN wild-type residues match the UniProt sequence at only %.0f%% "
+                            "of positions (sequence version differs from the model?)", st.acc, 100 * agree)
         if df is None and cfg.thermompnn_compute and st.pdb is not None:
+            run_dir = Path(cfg.cache_dir) / st.acc / "thermompnn_run"
             try:
-                df = tm_mod.run_thermompnn(st.pdb, Path(cfg.cache_dir) / st.acc / "thermompnn_run", cfg.external_dir)
-                source = "computed"
+                df = tm_mod.run_thermompnn(st.pdb, run_dir, cfg.external_dir)
+                if df is not None and len(df):
+                    df["thermompnn_source"] = "computed"
+                    _save_cache(cfg, st.acc, "thermompnn", df)
+                    shutil.rmtree(run_dir, ignore_errors=True)
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"thermompnn_run: {e}")
                 log.error("%s: ThermoMPNN inference failed: %s", st.acc, e)
-        if df is not None and len(df):
-            if "thermompnn_source" not in df.columns:
-                df["thermompnn_source"] = source
-            _save_cache(cfg, st.acc, "thermompnn", df)
-            st.notes["thermompnn_source"] = df["thermompnn_source"].iloc[0]
-        else:
-            st.notes["thermompnn_source"] = "missing"
+        st.notes["thermompnn_source"] = (df["thermompnn_source"].iloc[0]
+                                         if df is not None and len(df) and "thermompnn_source" in df.columns
+                                         else "missing")
         st.variants = _merge(st.variants, df, ["thermompnn"])
 
 
@@ -352,6 +363,7 @@ def stage_esm1v(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> No
             if len(per_model[st.acc]) == n_models:
                 df = esm_mod.esm1v_frame(per_model[st.acc], st.entry.sequence)
                 _save_cache(cfg, st.acc, "esm1v", df)
+                remove_esm1v_matrices(Path(cfg.cache_dir) / st.acc)
             else:
                 # incomplete ensemble (a model failed): report nothing and keep the per-model
                 # matrices so that a re-run only computes the missing member(s)
@@ -401,10 +413,18 @@ def stage_foldx(cfg: Config, states: list[ProteinState]) -> None:
                 positions = sorted(set(st.clinvar_df["position"])) if len(st.clinvar_df) else []
             try:
                 log.info("%s: FoldX BuildModel (%s positions)", st.acc, "all" if positions is None else len(positions))
-                df = foldx_mod.foldx_saturation(binary, st.pdb, Path(cfg.cache_dir) / st.acc / "foldx",
-                                                chunk_size=cfg.foldx_chunk, positions=positions,
-                                                workers=cfg.foldx_workers)
-                _save_cache(cfg, st.acc, "foldx", df)
+                work = Path(cfg.cache_dir) / st.acc / "foldx"
+                df = foldx_mod.foldx_saturation(binary, st.pdb, work, chunk_size=cfg.foldx_chunk,
+                                                positions=positions, workers=cfg.foldx_workers)
+                if df["foldx"].notna().all():
+                    _save_cache(cfg, st.acc, "foldx", df)
+                    shutil.rmtree(work, ignore_errors=True)
+                else:
+                    # keep finished chunks for the next run; failed chunks are retried then
+                    n_bad = int(df["foldx"].isna().sum())
+                    st.errors.append(f"foldx: {n_bad} mutants failed")
+                    log.error("%s: FoldX failed for %d of %d mutants; not cached, rerun to retry",
+                              st.acc, n_bad, len(df))
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"foldx: {e}")
                 log.error("%s: FoldX failed: %s", st.acc, e)
@@ -452,7 +472,7 @@ def run_pipeline(cfg: Config) -> dict:
     """Process proteins in batches; stream per-variant results to disk so memory stays bounded."""
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    db = ResultsDB(out / "ve_simple.sqlite")
+    db = None if cfg.cache_only else ResultsDB(out / "ve_simple.sqlite")
     zen = prepare_thermompnn_archive(cfg)
     pool = ScorerPool(cfg)
 
@@ -461,6 +481,9 @@ def run_pipeline(cfg: Config) -> dict:
     for pth in (tsv_path, cv_path):
         if pth.exists():
             pth.unlink()
+    if cfg.cache_only:
+        for pth in (out / "ve_simple.sqlite", out / "auc_long.tsv", out / "auc_per_protein.tsv"):
+            pth.unlink(missing_ok=True)
     prot_rows: list[dict] = []
     auc_frames: list[pd.DataFrame] = []
     labelled_frames: list[pd.DataFrame] = []   # pathogenic/benign variants only, for the ROC plots
@@ -482,6 +505,8 @@ def run_pipeline(cfg: Config) -> dict:
             attach_clinvar(st)
             prow = protein_row(st, cfg)
             prot_rows.append(prow)
+            if cfg.cache_only:
+                continue
             db.write_protein(prow)
             db.write_variants(st.variants)
             st.variants.to_csv(tsv_path, sep="\t", index=False, mode="a", header=not tsv_path.exists())
@@ -496,12 +521,18 @@ def run_pipeline(cfg: Config) -> dict:
                 lab = st.variants[st.variants["clinvar_label"].isin(["pathogenic", "benign"])]
                 if len(lab):
                     labelled_frames.append(lab)
-            write_json({"notes": st.notes, "errors": st.errors}, Path(cfg.cache_dir) / st.acc / "status.json")
         del states
     pool.close()
 
     if not prot_rows:
         raise SystemExit("No valid UniProt accessions could be fetched.")
+    if cfg.cache_only:
+        proteins = pd.DataFrame(prot_rows)
+        proteins.to_csv(out / "proteins.tsv", sep="\t", index=False)
+        summary = {"n_requested": len(cfg.ids), "n_proteins": len(prot_rows), "cache_only": True,
+                   "outputs": {"proteins": str(out / "proteins.tsv")}}
+        write_json(summary, out / "summary.json")
+        return summary
     if not cv_path.exists():
         pd.DataFrame(columns=clinvar.CLINVAR_COLUMNS).to_csv(cv_path, sep="\t", index=False)
     proteins = pd.DataFrame(prot_rows)
@@ -528,3 +559,21 @@ def run_pipeline(cfg: Config) -> dict:
     }
     write_json(summary, out / "summary.json")
     return summary
+
+
+def run_foldx_only(cfg: Config) -> dict:
+    """FoldX for each protein, written to the cache only (no result files): for cluster arrays."""
+    n_done = n_failed = 0
+    for i in range(0, len(cfg.ids), cfg.batch_proteins):
+        states = stage_fetch(cfg, cfg.ids[i:i + cfg.batch_proteins])
+        for st in states:
+            st.variants = st.variants[["accession", "position", "wt", "mut"]]
+        stage_foldx(cfg, states)
+        for st in states:
+            if any(e.startswith("foldx") for e in st.errors) or "foldx" not in st.variants or \
+                    st.variants["foldx"].isna().all():
+                n_failed += 1
+            else:
+                n_done += 1
+    log.info("FoldX finished for %d protein(s), failed or skipped for %d", n_done, n_failed)
+    return {"done": n_done, "failed": n_failed}

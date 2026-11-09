@@ -38,38 +38,73 @@ def _run(binary: str, args: list[str], cwd: Path) -> subprocess.CompletedProcess
 
 
 def repair_pdb(binary: str, pdb_path: Path, work_dir: Path) -> Path:
+    """RepairPDB in a temporary directory; only the repaired model is kept."""
     work_dir.mkdir(parents=True, exist_ok=True)
     pdb_path = Path(pdb_path)
-    local = work_dir / pdb_path.name
-    if not local.exists():
-        shutil.copy(pdb_path, local)
     repaired = work_dir / f"{pdb_path.stem}_Repair.pdb"
     if repaired.exists():
         return repaired
-    res = _run(binary, ["--command=RepairPDB", f"--pdb={local.name}", "--pdb-dir=.", "--output-dir=."], work_dir)
-    if res.returncode != 0 or not repaired.exists():
-        raise RuntimeError(f"FoldX RepairPDB failed: {res.stdout[-2000:]}\n{res.stderr[-2000:]}")
+    tmp = work_dir / "run_repair"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    try:
+        shutil.copy(pdb_path, tmp / pdb_path.name)
+        res = _run(binary, ["--command=RepairPDB", f"--pdb={pdb_path.name}", "--pdb-dir=.", "--output-dir=."], tmp)
+        out = tmp / repaired.name
+        if res.returncode != 0 or not out.exists():
+            raise RuntimeError(f"FoldX RepairPDB failed: {res.stdout[-2000:]}\n{res.stderr[-2000:]}")
+        os.replace(out, repaired)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return repaired
 
 
+def foldx_extra_args() -> list[str]:
+    """Extra BuildModel options. `--out-pdb=false` stops FoldX writing two model PDBs per mutant;
+    set VE_SIMPLE_FOLDX_EXTRA="" if your FoldX build rejects it."""
+    return os.environ.get("VE_SIMPLE_FOLDX_EXTRA", "--out-pdb=false").split()
+
+
 def _build_chunk(binary: str, repaired: Path, work_dir: Path, chain: str, tag: str,
-                 chunk: list[tuple[int, str, str]], number_of_runs: int) -> Optional[Path]:
-    """Run BuildModel for one chunk of mutants; returns the Dif_*.fxout path (or None on failure)."""
-    dif = work_dir / f"Dif_{repaired.stem}_{tag}.fxout"
-    if dif.exists():
-        return dif
-    mlist = work_dir / f"individual_list_{tag}.txt"
-    mlist.write_text("".join(f"{wt}{chain}{pos}{mut};\n" for pos, wt, mut in chunk))
-    res = _run(binary, ["--command=BuildModel", f"--pdb={repaired.name}", "--pdb-dir=.",
-                        f"--mutant-file={mlist.name}", f"--numberOfRuns={number_of_runs}",
-                        f"--output-file={repaired.stem}_{tag}", "--output-dir=."], work_dir)
-    if res.returncode != 0 or not dif.exists():
-        log.error("FoldX BuildModel failed for chunk %s: %s", tag, res.stdout[-1500:])
-        return None
-    # remove bulky mutant/WT model PDBs that BuildModel writes
-    for p in work_dir.glob(f"*{repaired.stem}_{tag}*.pdb"):
-        p.unlink()
-    return dif
+                 chunk: list[tuple[int, str, str]], number_of_runs: int) -> Optional[list[float]]:
+    """BuildModel for one chunk of mutants, in a private temporary directory.
+
+    Only the ddG values are kept (`chunk_<tag>.txt`, one number per mutant, so an interrupted run
+    resumes from finished chunks); every file FoldX writes is deleted.  A private directory also
+    keeps concurrent workers from overwriting each other's identically named model files.
+    """
+    result = work_dir / f"chunk_{tag}.txt"
+    if result.exists():
+        try:
+            vals = [float(x) for x in result.read_text().split()]
+            if len(vals) == len(chunk):
+                return vals
+        except ValueError:
+            pass
+        result.unlink()
+    tmp = work_dir / f"run_{tag}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    try:
+        shutil.copy(repaired, tmp / repaired.name)
+        (tmp / "individual_list.txt").write_text("".join(f"{wt}{chain}{pos}{mut};\n" for pos, wt, mut in chunk))
+        res = _run(binary, ["--command=BuildModel", f"--pdb={repaired.name}", "--pdb-dir=.",
+                            "--mutant-file=individual_list.txt", f"--numberOfRuns={number_of_runs}",
+                            f"--output-file={tag}", "--output-dir=."] + foldx_extra_args(), tmp)
+        difs = sorted(tmp.glob("Dif_*.fxout"))
+        if res.returncode != 0 or not difs:
+            log.error("FoldX BuildModel failed for chunk %s: %s", tag, (res.stdout + res.stderr)[-1500:])
+            return None
+        vals = _parse_dif(difs[0], number_of_runs)
+        if len(vals) != len(chunk):
+            log.error("FoldX chunk %s returned %d values for %d mutants", tag, len(vals), len(chunk))
+            return None
+        part = result.with_name(result.name + ".tmp")
+        part.write_text("\n".join(repr(v) for v in vals))
+        os.replace(part, result)
+        return vals
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def foldx_saturation(binary: str, pdb_path: Path, work_dir: Path, chain: str = "A",
@@ -78,7 +113,7 @@ def foldx_saturation(binary: str, pdb_path: Path, work_dir: Path, chain: str = "
     """BuildModel ddG for every single substitution (or only `positions`) of the first chain.
 
     Mutants are processed in chunks of `chunk_size`; `workers` chunks run concurrently (FoldX is
-    single-threaded, so give the job that many cores).  Finished chunks are re-used on re-runs.
+    single-threaded, so give the job that many cores).  Mutants of failed chunks are NaN.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -98,11 +133,11 @@ def foldx_saturation(binary: str, pdb_path: Path, work_dir: Path, chain: str = "
         futures = [(chunk, pool.submit(_build_chunk, binary, repaired, work_dir, chain, tag, chunk, number_of_runs))
                    for tag, chunk in chunks]
         for chunk, fut in futures:
-            dif = fut.result()
-            if dif is None:
+            vals = fut.result()
+            if vals is None:
                 continue
-            for (pos, wt, mut), ddg in zip(chunk, _parse_dif(dif, number_of_runs)):
-                results[(pos, wt, mut)] = ddg
+            for key, ddg in zip(chunk, vals):
+                results[key] = ddg
     rows = [{"position": p, "wt": w, "mut": m, "foldx": results.get((p, w, m))} for p, w, m in muts]
     return pd.DataFrame(rows, columns=FOLDX_COLUMNS)
 

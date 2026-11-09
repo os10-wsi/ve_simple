@@ -10,6 +10,7 @@ Two sources, in order of preference:
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,7 @@ class ZenodoThermoMPNN:
     def __init__(self, data_dir: Path, archive: Optional[Path] = None):
         self.data_dir = Path(data_dir)
         self.archive = Path(archive) if archive else self.data_dir / ZENODO_ARCHIVE_NAME
-        self.extract_dir = self.data_dir / "thermompnn_outs"
+        self.extract_dir = self.data_dir / "thermompnn_outs"   # only used by the legacy --extract-all
         self.index_path = self.data_dir / "thermompnn_outs.index.json"
         self._index: Optional[dict[str, list[str]]] = None
 
@@ -82,55 +83,92 @@ class ZenodoThermoMPNN:
         return index
 
     def available(self, acc: str) -> bool:
-        return acc in self.build_index()
+        return bool(self.members_for(acc))
 
-    # -- extraction ---------------------------------------------------------------------------
-    def _local_path(self, member: str) -> Path:
-        return self.extract_dir / member
+    def members_for(self, acc: str) -> list[str]:
+        """Canonical-model archive members for `acc` (one per AlphaFold fragment F1, F2, ...)."""
+        out = []
+        for name in self.build_index().get(acc, []):
+            frag = member_fragment(name)
+            if frag is not None and frag[0] == acc:
+                out.append(name)
+        return out
 
-    def extract(self, accessions: Iterable[str]) -> dict[str, list[Path]]:
-        """Extract members for `accessions` that are not yet on disk (single streaming pass)."""
-        index = self.build_index()
-        wanted: dict[str, str] = {}
-        found: dict[str, list[Path]] = {}
-        for acc in accessions:
-            for member in index.get(acc, []):
-                p = self._local_path(member)
-                found.setdefault(acc, []).append(p)
-                if not p.exists():
-                    wanted[member] = acc
-        if wanted:
-            log.info("Extracting ThermoMPNN predictions for %d file(s) from the Zenodo archive", len(wanted))
-            with tarfile.open(self.archive, "r|gz") as tf:
-                for m in tf:
-                    if m.name in wanted and m.isfile():
-                        tf.extract(m, path=self.extract_dir, filter="data")
-                        del wanted[m.name]
-                        if not wanted:
-                            break
-        return found
+    def stream(self, accessions: Iterable[str], sink: Callable[[str, pd.DataFrame], None]) -> int:
+        """Read the predictions for `accessions` in ONE pass over the archive, without unpacking it.
 
-    def extract_all(self) -> None:
-        with tarfile.open(self.archive, "r|gz") as tf:
-            tf.extractall(path=self.extract_dir, filter="data")
-
-    # -- parsing -------------------------------------------------------------------------------
-    def load(self, acc: str, sequence: Optional[str] = None) -> Optional[pd.DataFrame]:
-        """Predictions for `acc` as (position, wt, mut, thermompnn) with 1-based positions.
-
-        The archive files were produced by ThermoMPNN's `custom_inference.py`, whose `position`
-        column is a 0-based sequence index; the offset is verified against `sequence` when given.
+        For each protein, `sink(accession, table)` is called with (position, wt, mut, thermompnn) in
+        1-based UniProt residue numbering.  Returns the number of proteins delivered.
         """
-        paths = self.extract([acc]).get(acc)
-        if not paths:
-            return None
-        frames = [parse_prediction_file(p) for p in paths]
-        frames = [f for f in frames if f is not None and len(f)]
-        if not frames:
-            return None
-        df = pd.concat(frames).drop_duplicates(["position", "wt", "mut"])
-        df["position"] = df["position"] + detect_position_offset(df, sequence)
-        return df[THERMOMPNN_COLUMNS].reset_index(drop=True)
+        wanted: dict[str, str] = {}
+        remaining: dict[str, int] = {}
+        for acc in accessions:
+            members = self.members_for(acc)
+            if members:
+                remaining[acc] = len(members)
+                for m in members:
+                    wanted[m] = acc
+        if not wanted:
+            return 0
+        log.info("Reading ThermoMPNN predictions for %d protein(s) from the Zenodo archive", len(remaining))
+        frames: dict[str, list[pd.DataFrame]] = {}
+        delivered = 0
+        with tarfile.open(self.archive, "r|gz") as tf:
+            for m in tf:
+                acc = wanted.pop(m.name, None)
+                if acc is None or not m.isfile():
+                    continue
+                fh = tf.extractfile(m)
+                df = parse_prediction_bytes(fh.read(), m.name) if fh is not None else None
+                if df is not None and len(df):
+                    df["position"] = df["position"] + fragment_offset(member_fragment(m.name)[1])
+                    frames.setdefault(acc, []).append(df)
+                remaining[acc] -= 1
+                if remaining[acc] == 0:
+                    if frames.get(acc):
+                        sink(acc, combine_fragments(frames.pop(acc)))
+                        delivered += 1
+                    del remaining[acc]
+                if not wanted:
+                    break
+        for acc in list(remaining):           # members listed in the index but not found
+            if frames.get(acc):
+                sink(acc, combine_fragments(frames.pop(acc)))
+                delivered += 1
+        return delivered
+
+
+# AlphaFold DB splits human proteins longer than 2,700 residues into 1,400-residue fragments
+# shifted by 200 residues (F1 = 1-1400, F2 = 201-1600, ...).  ThermoMPNN's `position` column is a
+# 0-based index into the fragment model, so residue = position + 1 + 200 * (fragment - 1).
+FRAGMENT_STEP = 200
+_MEMBER_RE = re.compile(r"AF-([A-Z0-9]+)-F(\d+)-model")
+
+
+def member_fragment(name: str) -> Optional[tuple[str, int]]:
+    """('P04637', 1) for '.../ThermoMPNN_inference_AF-P04637-F1-model_v4.csv'; None for isoforms."""
+    m = _MEMBER_RE.search(os.path.basename(name))
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def fragment_offset(fragment: int) -> int:
+    return 1 + FRAGMENT_STEP * (fragment - 1)
+
+
+def combine_fragments(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Merge fragment tables; residues covered by overlapping fragments get the mean ddG."""
+    df = pd.concat(frames, ignore_index=True)
+    if len(frames) > 1:
+        df = df.groupby(["position", "wt", "mut"], as_index=False)["thermompnn"].mean()
+    return df[THERMOMPNN_COLUMNS].sort_values(["position", "mut"]).reset_index(drop=True)
+
+
+def wt_agreement(df: pd.DataFrame, sequence: str, shift: int = 0) -> float:
+    pos = df["position"].to_numpy() + shift
+    ok = (pos >= 1) & (pos <= len(sequence))
+    if ok.sum() == 0:
+        return 0.0
+    return float(np.mean([sequence[p - 1] == w for p, w in zip(pos[ok], df["wt"].to_numpy()[ok])]))
 
 
 def detect_position_offset(df: pd.DataFrame, sequence: Optional[str], default: int = 1) -> int:
@@ -178,6 +216,16 @@ def _standardise(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     out["thermompnn"] = pd.to_numeric(out["thermompnn"], errors="coerce")
     out = out[(out["wt"] != out["mut"]) & out["mut"].isin(list(AMINO_ACIDS))]
     return out
+
+
+def parse_prediction_bytes(data: bytes, name: str = "") -> Optional[pd.DataFrame]:
+    """Parse one ThermoMPNN prediction file held in memory (as read from the tar archive)."""
+    try:
+        df = pd.read_csv(io.BytesIO(data), sep="\t" if ".tsv" in name else ",")
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not parse %s: %s", name, e)
+        return None
+    return _standardise(df)
 
 
 def parse_prediction_file(path: Path) -> Optional[pd.DataFrame]:
