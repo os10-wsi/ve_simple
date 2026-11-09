@@ -166,6 +166,25 @@ def cmd_check_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_incomplete_chunks(args: argparse.Namespace) -> int:
+    """Print the chunk files (one per line) that contain a protein with missing phase-1 tables."""
+    from .cachecheck import missing_tables
+
+    n_prot = 0
+    for chunk in sorted(Path(args.chunk_dir).glob("ids_*")):
+        accs = read_id_list(chunk)
+        gaps = {a: missing_tables(a, args.cache) for a in accs}
+        gaps = {a: m for a, m in gaps.items() if m}
+        if gaps:
+            n_prot += len(gaps)
+            print(chunk)
+            if args.verbose:
+                for a, m in gaps.items():
+                    print(f"  {a}: {', '.join(m)}", file=sys.stderr)
+    print(f"{n_prot} protein(s) with missing tables", file=sys.stderr)
+    return 0
+
+
 def cmd_foldx(args: argparse.Namespace) -> int:
     from .pipeline import Config, run_foldx_only
     from .predictors.foldx import find_foldx
@@ -228,6 +247,11 @@ def main(argv=None) -> int:
     p_c.add_argument("--delete", action="store_true")
     p_c.add_argument("-v", "--verbose", action="store_true")
     p_c.set_defaults(func=cmd_check_cache)
+    p_i = sub.add_parser("incomplete-chunks", help="list phase-1 chunk files whose proteins lack cached tables")
+    p_i.add_argument("chunk_dir", type=Path)
+    p_i.add_argument("--cache", type=Path, default=Path("cache"))
+    p_i.add_argument("-v", "--verbose", action="store_true")
+    p_i.set_defaults(func=cmd_incomplete_chunks)
     p_f = sub.add_parser("foldx", help="run FoldX only, writing to the cache (for cluster job arrays)")
     p_f.add_argument("--ids", type=Path)
     p_f.add_argument("--id", dest="id_list", nargs="*", default=[])

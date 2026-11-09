@@ -254,3 +254,26 @@ def compact_cache(cache_dir: Path, data_dir: Optional[Path] = None, accessions: 
                 rm(tm)
                 counts["thermompnn_reset"] += 1
     return counts
+
+
+def missing_tables(acc: str, cache_dir: Path) -> list[str]:
+    """Phase-1 score tables a protein should have but does not (empty list = complete).
+
+    ESM-1v is always expected; SaProt, solvent exposure and ThermoMPNN when an AlphaFold model is
+    cached (ThermoMPNN comes from the archive or is computed on that model).
+    """
+    d = Path(cache_dir) / acc
+    up = d / "uniprot.json"
+    if up.exists():
+        try:
+            primary = json.loads(up.read_text()).get("primaryAccession", acc)
+            if primary != acc and (Path(cache_dir) / primary).is_dir():
+                d = Path(cache_dir) / primary
+        except Exception:  # noqa: BLE001
+            pass
+    if not d.is_dir():
+        return ["all"]
+    need = ["scores_esm1v.tsv"]
+    if any(d.glob("AF-*-model.pdb")):
+        need += ["scores_saprot.tsv", "scores_exposure.tsv", "scores_thermompnn.tsv"]
+    return [n for n in need if not (d / n).exists()]

@@ -1,5 +1,7 @@
 #!/bin/bash
-# Resubmit only the phase-1 chunks of one ID file that did not finish (no summary.json).
+# Resubmit the phase-1 chunks of one ID file that are not complete: chunks without summary.json,
+# and chunks containing a protein whose ESM-1v / SaProt / exposure / ThermoMPNN table is missing
+# from the cache (e.g. deleted by a clean-up). Proteins already cached are reloaded in seconds.
 # Usage:  bash lsf/phase1_resubmit_failed.sh all_ids.txt
 set -euo pipefail
 IDS=${1:?id list (same file given to phase1_gpu.sh)}
@@ -8,10 +10,13 @@ MEM=${HOST_MEM:-24000}
 TAG=$(basename "$IDS"); TAG=${TAG%.*}
 CHUNKS="lsf/chunks/${TAG}"
 [ -d "$CHUNKS" ] || { echo "no chunks for $TAG; run phase1_gpu.sh first"; exit 1; }
+INCOMPLETE=$(ve-simple incomplete-chunks "$CHUNKS")
 n_sub=0
 for f in "$CHUNKS"/ids_*; do
   n=$(basename "$f")
-  [ -f "results_phase1/${TAG}/${n}/summary.json" ] && continue
+  if [ -f "results_phase1/${TAG}/${n}/summary.json" ] && ! grep -qx "$f" <<< "$INCOMPLETE"; then
+    continue
+  fi
   if bjobs -noheader -J "ve_${TAG}_${n}" 2>/dev/null | grep -qE "RUN|PEND"; then
     echo "${TAG}_${n}: still queued/running, skipping"; continue
   fi
