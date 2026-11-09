@@ -10,7 +10,7 @@ intervals and a multi-panel PDF of ROC curves.
 
 | column | source | needs | orientation used for AUC |
 |---|---|---|---|
-| `alphamissense` | AlphaMissense pathogenicity (per-protein table from AlphaFold DB) | human | higher = pathogenic |
+| `alphamissense` | AlphaMissense pathogenicity (per-protein table from AlphaFold DB; proteins it lacks are filled from the full AlphaMissense release) | human | higher = pathogenic |
 | `esm1v` | ESM-1v masked-marginal log-odds, mean of up to 5 ensemble models | sequence | lower = pathogenic |
 | `saprot` | SaProt (650M, AF2) structure-aware masked-marginal log-odds | AlphaFold model | lower = pathogenic |
 | `thermompnn` | ThermoMPNN ddG (kcal/mol) | AlphaFold model | higher = destabilising |
@@ -118,6 +118,12 @@ whenever a protein has at least `--min-per-class` pathogenic and benign variants
 that predictor; otherwise the fields are empty.
 
 ## Notes and limitations
+
+* AlphaFold models, the AlphaMissense release and the ThermoMPNN archive were computed on the
+  UniProt sequences of 2021-2022. Where UniProt has since changed a canonical sequence, these
+  tables are aligned to the current sequence and only residues that align to an identical residue
+  keep their value; `proteins.tsv` lists the affected predictors and the fraction of residues kept
+  in `remapped_predictors`.
 
 * The ClinVar annotations come from the EBI Proteins API rather than directly from NCBI, so a
   variant appears only once UniProt/EBI have mapped it onto the protein; releases lag ClinVar by

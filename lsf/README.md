@@ -19,8 +19,9 @@ directory (or pass the same `--cache`, `--data-dir` and `--external-dir`) so tha
    proteins (default 10) with several cores, long queue, writing only to the cache. FoldX is the slow part: BuildModel takes a few seconds per mutant, and a
    400-residue protein has 7,600 mutants.
 
-4. **Phase 3, assembly** (`lsf/phase3_assemble.sh`): one short job that reads the cache, builds the
-   combined tables, database, AUC statistics and ROC PDF.
+4. **Phase 3, assembly** (`lsf/phase3_assemble.sh`): one job that reads the cache, fills
+   AlphaMissense for human proteins AlphaFold DB does not serve (one pass over the 1.2 GB release,
+   ~10-20 minutes), and builds the combined tables, database, AUC statistics and ROC PDF.
 
 Chunk files, job names, logs and `results_phase*` directories are namespaced by the ID file's basename
 (e.g. `uniprot_reviewed_9606`), so different proteomes can be submitted independently. Chunks that
@@ -36,6 +37,7 @@ Run each proteome as its own set of jobs with its own output directory; the cach
 The ID files can be UniProt TSV downloads (the first accession on each line is used).
 
     ve-simple fetch-zenodo                                     # once
+    ve-simple fetch-alphamissense                              # once (used by the assembly step)
     bash lsf/phase1_gpu.sh uniprot_reviewed_9606.txt 100       # ~205 GPU jobs
     bash lsf/phase1_gpu.sh uniprot_reviewed_559292.txt 100     # ~68 GPU jobs (ThermoMPNN computed de novo)
     FOLDX_BINARY=... bash lsf/phase2_foldx.sh uniprot_reviewed_9606.txt 8

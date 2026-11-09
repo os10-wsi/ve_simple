@@ -51,12 +51,16 @@ def check_score_table(path: Path, sequence: Optional[str] = None) -> Optional[st
         score_col = cols[-1]
         if not pd.api.types.is_numeric_dtype(df[score_col]):
             return f"non-numeric {score_col} column"
-    if path.name == "scores_esm1v.tsv" and sequence and len(df) != expected_esm1v_rows(sequence):
-        return f"{len(df)} rows, expected {expected_esm1v_rows(sequence)}"
-    if sequence is not None and len(df):
+    # Only ESM-1v is computed on the current UniProt sequence. Tables from AlphaFold models or the
+    # ThermoMPNN archive may legitimately use an older sequence version (they are aligned when used).
+    if path.name == "scores_esm1v.tsv" and sequence:
+        if len(df) != expected_esm1v_rows(sequence):
+            return f"{len(df)} rows, expected {expected_esm1v_rows(sequence)}"
         pos = df["position"].to_numpy()
         if pos.max() > len(sequence) or pos.min() < 1:
             return "positions outside the sequence"
+    if len(df) and df["position"].min() < 1:
+        return "non-positive positions"
     return None
 
 

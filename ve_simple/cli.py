@@ -31,6 +31,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
                    help="FoldX processes to run in parallel per protein (FoldX itself is single-threaded)")
     p.add_argument("--no-thermompnn-download", action="store_true", help="do not download the Zenodo archive")
     p.add_argument("--no-thermompnn-compute", action="store_true", help="never run ThermoMPNN de novo")
+    p.add_argument("--no-alphamissense-bulk", action="store_true",
+                   help="do not fill AlphaMissense gaps from the 1.2 GB bulk release")
     p.add_argument("--bootstrap", type=int, default=1000, help="bootstrap resamples for AUC confidence intervals")
     p.add_argument("--min-per-class", type=int, default=1, help="minimum pathogenic and benign variants to compute an AUC")
     p.add_argument("--strict-labels", action="store_true",
@@ -79,7 +81,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         thermompnn_download=not args.no_thermompnn_download, thermompnn_compute=not args.no_thermompnn_compute,
         n_boot=args.bootstrap, min_per_class=args.min_per_class, include_likely=not args.strict_labels,
         force=args.force, batch_proteins=max(1, args.batch_proteins), make_pdf=not args.no_pdf,
-        cache_only=args.cache_only,
+        cache_only=args.cache_only, am_bulk=not args.no_alphamissense_bulk,
     )
     if args.plot_predictors:
         cfg.plot_predictors = [s.strip() for s in args.plot_predictors.split(",") if s.strip()]
@@ -101,6 +103,19 @@ def cmd_fetch_zenodo(args: argparse.Namespace) -> int:
     if args.extract_all:
         print("--extract-all is no longer needed (the archive is read directly) and is ignored; "
               f"if {zen.extract_dir} exists you can delete it.")
+    return 0
+
+
+def cmd_fetch_alphamissense(args: argparse.Namespace) -> int:
+    from .predictors.alphamissense import BULK_NAME, BULK_URL
+    from .utils import download_file
+
+    dest = Path(args.data_dir) / BULK_NAME
+    if dest.exists():
+        print(f"Already present: {dest}")
+    else:
+        download_file(BULK_URL, dest, timeout=3600)
+        print(f"Downloaded {dest}")
     return 0
 
 
@@ -194,6 +209,11 @@ def main(argv=None) -> int:
     p_z.add_argument("--extract-all", action="store_true", help="ignored (kept for old instructions)")
     p_z.add_argument("-v", "--verbose", action="store_true")
     p_z.set_defaults(func=cmd_fetch_zenodo)
+    p_a = sub.add_parser("fetch-alphamissense",
+                         help="download the AlphaMissense release (1.2 GB) used for proteins AlphaFold DB lacks")
+    p_a.add_argument("--data-dir", type=Path, default=Path("data/alphamissense"))
+    p_a.add_argument("-v", "--verbose", action="store_true")
+    p_a.set_defaults(func=cmd_fetch_alphamissense)
     p_e = sub.add_parser("evaluate", help="recompute AUC tables and ROC plots from an existing results directory")
     p_e.add_argument("--out", type=Path, default=Path("results"))
     p_e.add_argument("--bootstrap", type=int, default=1000)

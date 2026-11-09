@@ -16,7 +16,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from . import alphafold, cachecheck, clinvar, uniprot
+from . import alphafold, cachecheck, clinvar, seqmap, uniprot
 from .constants import PREDICTOR_DIRECTIONS
 from .db import ResultsDB
 from .evaluate import auc_for_protein, wide_auc_table
@@ -57,6 +57,7 @@ class Config:
     plot_predictors: list[str] = field(default_factory=lambda: list(DEFAULT_PLOT_PREDICTORS))
     make_pdf: bool = True
     cache_only: bool = False                           # compute + cache scores; write only proteins.tsv/summary.json
+    am_bulk: bool = True                               # fill AlphaMissense gaps from the bulk release
     batch_proteins: int = 25                           # proteins processed together per stage
     force: bool = False
 
@@ -197,6 +198,17 @@ def _merge(variants: pd.DataFrame, df: Optional[pd.DataFrame], cols: list[str], 
     return variants.merge(df, on=on, how="left")
 
 
+def _merge_mapped(st: ProteinState, df: Optional[pd.DataFrame], cols: list[str], name: str,
+                  on=VARIANT_KEY) -> None:
+    """Merge a table computed on an AlphaFold model or archive sequence: residue numbers are first
+    checked against (and if needed aligned to) the current UniProt sequence."""
+    if df is not None and len(df):
+        df, frac = seqmap.remap_to_sequence(df, st.entry.sequence, f"{st.acc} {name}")
+        if frac is not None:
+            st.notes.setdefault("remapped", {})[name] = round(frac, 3)
+    st.variants = _merge(st.variants, df, cols, on=on)
+
+
 def _check_structure_matches(st: ProteinState) -> bool:
     """AlphaFold models are built from the UniProt sequence; verify before mapping positions."""
     if st.pdb is None:
@@ -267,7 +279,7 @@ def stage_simple(cfg: Config, states: list[ProteinState]) -> None:
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"solvent_exposure: {e}")
                 log.error("%s: SASA failed: %s", st.acc, e)
-        st.variants = _merge(st.variants, exp, ["solvent_exposure", "plddt"], on=["position", "wt"])
+        _merge_mapped(st, exp, ["solvent_exposure", "plddt"], "solvent_exposure", on=["position", "wt"])
         # AlphaMissense
         am = None
         if st.am_csv is not None and "alphamissense" not in cfg.skip:
@@ -275,7 +287,7 @@ def stage_simple(cfg: Config, states: list[ProteinState]) -> None:
                 am = am_mod.read_alphamissense(st.am_csv)
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"alphamissense: {e}")
-        st.variants = _merge(st.variants, am, ["alphamissense", "alphamissense_class"])
+        _merge_mapped(st, am, ["alphamissense", "alphamissense_class"], "alphamissense")
 
 
 # ---------------------------------------------------------------------- stage 3: ThermoMPNN
@@ -302,16 +314,10 @@ def stage_thermompnn(cfg: Config, states: list[ProteinState], zen: Optional[tm_m
         for st in states:
             df = _load_cached(cfg, st.acc, "thermompnn")
             st.notes["thermompnn_source"] = df["thermompnn_source"].iloc[0] if df is not None and len(df) else "skipped"
-            st.variants = _merge(st.variants, df, ["thermompnn"])
+            _merge_mapped(st, df, ["thermompnn"], "thermompnn")
         return
     for st in states:
         df = _load_cached(cfg, st.acc, "thermompnn")
-        if df is not None and len(df):
-            agree = tm_mod.wt_agreement(df, st.entry.sequence)
-            if agree < 0.9:
-                st.notes["thermompnn_wt_agreement"] = round(agree, 3)
-                log.warning("%s: ThermoMPNN wild-type residues match the UniProt sequence at only %.0f%% "
-                            "of positions (sequence version differs from the model?)", st.acc, 100 * agree)
         if df is None and cfg.thermompnn_compute and st.pdb is not None:
             run_dir = Path(cfg.cache_dir) / st.acc / "thermompnn_run"
             try:
@@ -326,7 +332,7 @@ def stage_thermompnn(cfg: Config, states: list[ProteinState], zen: Optional[tm_m
         st.notes["thermompnn_source"] = (df["thermompnn_source"].iloc[0]
                                          if df is not None and len(df) and "thermompnn_source" in df.columns
                                          else "missing")
-        st.variants = _merge(st.variants, df, ["thermompnn"])
+        _merge_mapped(st, df, ["thermompnn"], "thermompnn")
 
 
 # -------------------------------------------------------------------------- stage 4: ESM-1v
@@ -378,7 +384,7 @@ def stage_saprot(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> N
     col = "saprot"
     if col in cfg.skip:
         for st in states:
-            st.variants = _merge(st.variants, _load_cached(cfg, st.acc, "saprot"), [col])
+            _merge_mapped(st, _load_cached(cfg, st.acc, "saprot"), [col], "saprot")
         return
     for st in states:
         df = _load_cached(cfg, st.acc, "saprot")
@@ -391,7 +397,7 @@ def stage_saprot(cfg: Config, states: list[ProteinState], pool: ScorerPool) -> N
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"saprot: {e}")
                 log.error("%s: SaProt failed: %s\n%s", st.acc, e, traceback.format_exc())
-        st.variants = _merge(st.variants, df, [col])
+        _merge_mapped(st, df, [col], "saprot")
 
 
 # --------------------------------------------------------------------------- stage 6: FoldX
@@ -403,7 +409,7 @@ def stage_foldx(cfg: Config, states: list[ProteinState]) -> None:
             log.warning("FoldX binary not found (set --foldx-binary or FOLDX_BINARY); foldx column left empty")
         for st in states:
             df = _load_cached(cfg, st.acc, "foldx")
-            st.variants = _merge(st.variants, df, [col])
+            _merge_mapped(st, df, [col], "foldx")
         return
     for st in states:
         df = _load_cached(cfg, st.acc, "foldx")
@@ -428,7 +434,7 @@ def stage_foldx(cfg: Config, states: list[ProteinState]) -> None:
             except Exception as e:  # noqa: BLE001
                 st.errors.append(f"foldx: {e}")
                 log.error("%s: FoldX failed: %s", st.acc, e)
-        st.variants = _merge(st.variants, df, [col])
+        _merge_mapped(st, df, [col], "foldx")
 
 
 # ------------------------------------------------------------- stage 7: labels, DB, evaluation
@@ -459,6 +465,7 @@ def protein_row(st: ProteinState, cfg: Config) -> dict:
         "has_alphamissense": st.am_csv is not None,
         "thermompnn_source": st.notes.get("thermompnn_source"),
         "structure_sequence_mismatch": bool(st.notes.get("structure_sequence_mismatch", False)),
+        "remapped_predictors": ";".join(f"{k}:{v}" for k, v in st.notes.get("remapped", {}).items()),
         "errors": "; ".join(st.errors),
     })
     row.update(clinvar.summarise(st.clinvar_df))
@@ -468,12 +475,39 @@ def protein_row(st: ProteinState, cfg: Config) -> dict:
     return row
 
 
+def prepare_alphamissense(cfg: Config) -> None:
+    """Fill AlphaMissense for human proteins that AlphaFold DB does not serve, in one bulk pass.
+
+    Done only when building result tables (not in --cache-only chunks).  UniProt and AlphaFold DB
+    metadata fetched here are cached, so the per-batch stages re-use them.
+    """
+    if cfg.cache_only or not cfg.am_bulk or "alphamissense" in cfg.skip:
+        return
+    missing = []
+    for acc in cfg.ids:
+        try:
+            entry = uniprot.fetch_entry(acc, cfg.cache_dir)
+            if entry is None or not entry.is_human:
+                continue
+            meta = alphafold.fetch_afdb_metadata(entry.accession, cfg.cache_dir)
+            if alphafold.fetch_alphamissense(entry.accession, cfg.cache_dir, meta) is None:
+                missing.append(entry.accession)
+        except Exception as e:  # noqa: BLE001
+            log.warning("%s: AlphaMissense availability check failed: %s", acc, e)
+    if missing:
+        try:
+            am_mod.fill_from_bulk(missing, cfg.cache_dir, Path(cfg.data_dir).parent / "alphamissense")
+        except Exception as e:  # noqa: BLE001
+            log.error("AlphaMissense bulk fill failed: %s", e)
+
+
 def run_pipeline(cfg: Config) -> dict:
     """Process proteins in batches; stream per-variant results to disk so memory stays bounded."""
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     db = None if cfg.cache_only else ResultsDB(out / "ve_simple.sqlite")
     zen = prepare_thermompnn_archive(cfg)
+    prepare_alphamissense(cfg)
     pool = ScorerPool(cfg)
 
     tsv_path = out / "variant_scores.tsv"
