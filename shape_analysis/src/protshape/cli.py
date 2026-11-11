@@ -96,16 +96,20 @@ def cmd_select_stage0(args) -> int:
 
 
 def _jobs(work: Path, accessions: list[str] | None, variants, max_box: int, use_final=False) -> list[dict]:
-    from .ted import load_domains
+    from .ted import load_domains, load_queried
 
     idx = pd.read_parquet(work / "index.parquet").set_index("accession")
     ann = pd.read_parquet(work / "annotations.parquet").set_index("accession")
     cls = pd.read_parquet(work / "classes.parquet").set_index("accession")
     ted = load_domains(work / "ted")
     ted_by = {a: g.to_dict("records") for a, g in ted.groupby("accession")}
+    queried = set(load_queried(work / "ted"))
     accs = accessions or idx.index[idx.has_model].tolist()
-    jobs = []
+    jobs, no_ted = [], []
     for a in accs:
+        if a not in queried:          # TED query failed or not run: do not mistake it for "no domains"
+            no_ted.append(a)
+            continue
         if a not in idx.index or not idx.at[a, "has_model"] or a not in ann.index:
             log.warning("%s: no cached model or annotation; skipped", a)
             continue
@@ -115,6 +119,9 @@ def _jobs(work: Path, accessions: list[str] | None, variants, max_box: int, use_
             "ann": ann.loc[a].to_dict(), "protein_class": cls.at[a, "class_annotation"] if a in cls.index else "AMBIGUOUS",
             "ted": ted_by.get(a, []), "variants": variants, "max_box": max_box,
         })
+    if no_ted:
+        log.warning("%d proteins skipped because their TED query has not succeeded yet (e.g. %s); "
+                    "run `protshape annotate` again, then compute", len(no_ted), ", ".join(no_ted[:5]))
     return jobs
 
 
@@ -195,7 +202,7 @@ def main(argv=None) -> int:
     s.add_argument("--threads", type=int, default=16)
     s.set_defaults(func=cmd_index)
     s = sub.add_parser("annotate", help="UniProt annotations from the cache, and TED domains from ted.cathdb.info")
-    s.add_argument("--threads", type=int, default=8)
+    s.add_argument("--threads", type=int, default=4, help="parallel TED queries (TED rate-limits above ~4)")
     s.add_argument("--no-ted", action="store_true")
     s.set_defaults(func=cmd_annotate)
     s = sub.add_parser("classify", help="membrane/soluble classes (class_final once metrics exist)")

@@ -26,7 +26,7 @@ TED_FIELDS = ["ted_id", "chopping", "consensus_level", "nres_domain", "num_segme
 MAX_SHIFT = 30
 
 
-def fetch_one(acc: str, session: requests.Session, page: int = 100, retries: int = 4) -> Optional[list[dict]]:
+def fetch_one(acc: str, session: requests.Session, page: int = 100, retries: int = 8) -> Optional[list[dict]]:
     """All TED domains for `acc` (paginated); [] if TED has none; None on persistent failure."""
     out, skip = [], 0
     while True:
@@ -35,6 +35,10 @@ def fetch_one(acc: str, session: requests.Session, page: int = 100, retries: int
                 r = session.get(API.format(acc=acc), params={"skip": skip, "limit": page}, timeout=60)
                 if r.status_code == 404:
                     return out
+                if r.status_code == 429:                 # rate limited: wait as told, or back off
+                    wait = float(r.headers.get("Retry-After", 0) or 0) or min(60, 5 * 2 ** attempt)
+                    time.sleep(wait)
+                    continue
                 r.raise_for_status()
                 d = r.json()
                 break
@@ -42,7 +46,10 @@ def fetch_one(acc: str, session: requests.Session, page: int = 100, retries: int
                 if attempt == retries - 1:
                     log.warning("%s: TED query failed (%s)", acc, ex)
                     return None
-                time.sleep(2 ** attempt)
+                time.sleep(min(60, 2 ** attempt))
+        else:
+            log.warning("%s: TED query still rate limited after %d attempts; rerun to retry", acc, retries)
+            return None
         data = d.get("data", [])
         for x in data:
             out.append({"accession": acc, **{k: x.get(k) for k in TED_FIELDS}})
@@ -60,7 +67,8 @@ def fetch_ted(accessions: list[str], out_dir: Path, threads: int = 8, part_size:
     log.info("TED: %d accessions already queried, %d to fetch", len(done), len(todo))
     s = requests.Session()
     s.headers["User-Agent"] = "protshape/0.1 (python-requests)"
-    n_parts = len(list(out_dir.glob("domains-*.parquet")))
+    n_parts = len(list(out_dir.glob("queried-*.parquet")))
+    n_failed = 0
     for i in range(0, len(todo), part_size):
         chunk = todo[i:i + part_size]
         with ThreadPoolExecutor(threads) as ex:
@@ -72,7 +80,10 @@ def fetch_ted(accessions: list[str], out_dir: Path, threads: int = 8, part_size:
             pd.DataFrame(rows).to_parquet(out_dir / f"domains-{tag}.parquet", index=False)
         queried.to_parquet(out_dir / f"queried-{tag}.parquet", index=False)
         n_parts += 1
-        log.info("TED: %d/%d fetched", min(i + part_size, len(todo)), len(todo))
+        n_failed += sum(d is None for _, d in res)
+        log.info("TED: %d/%d fetched (%d failed so far)", min(i + part_size, len(todo)), len(todo), n_failed)
+    if n_failed:
+        log.warning("TED: %d accessions failed; run `protshape annotate` again to retry only those", n_failed)
 
 
 def load_queried(out_dir: Path) -> list[str]:

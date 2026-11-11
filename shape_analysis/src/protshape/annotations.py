@@ -11,15 +11,21 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
-def _seg(f) -> tuple[int, int]:
-    return int(f["location"]["start"]["value"]), int(f["location"]["end"]["value"])
+def _seg(f):
+    """(start, end) of a feature, or None if either end is unknown in UniProt."""
+    a, b = f["location"]["start"].get("value"), f["location"]["end"].get("value")
+    return (int(a), int(b)) if a is not None and b is not None else None
 
 
 def parse_entry(e: dict) -> dict:
     feats = e.get("features", [])
-    tm = [f for f in feats if f.get("type") == "Transmembrane" and f["location"]["start"].get("value")]
+    # Every TM/intramembrane feature counts towards the class; only those with both ends known give
+    # residue positions (e.g. TIM23 P32897 has a TM segment with an unknown end).
+    tm = [f for f in feats if f.get("type") == "Transmembrane"]
     tm_kind = ["beta" if "beta" in (f.get("description") or "").lower() else "helical" for f in tm]
-    intra = [f for f in feats if f.get("type") == "Intramembrane" and f["location"]["start"].get("value")]
+    tm_segs = [_seg(f) for f in tm if _seg(f)]
+    intra = [f for f in feats if f.get("type") == "Intramembrane"]
+    intra_segs = [_seg(f) for f in intra if _seg(f)]
     lipid = [f for f in feats if f.get("type") == "Lipidation"]
     locs, topos = [], []
     for c in e.get("comments", []):
@@ -43,9 +49,10 @@ def parse_entry(e: dict) -> dict:
         "protein_name": rec.get("fullName", {}).get("value", "") if rec else "",
         "length": int(e.get("sequence", {}).get("length", 0)),
         "mass": float(e.get("sequence", {}).get("molWeight", 0)),
-        "tm_start": [_seg(f)[0] for f in tm], "tm_end": [_seg(f)[1] for f in tm], "tm_kind": tm_kind,
+        "tm_start": [a for a, _ in tm_segs], "tm_end": [b for _, b in tm_segs], "tm_kind": tm_kind,
+        "n_tm_unplaced": len(tm) - len(tm_segs),
         "n_tm_helical": tm_kind.count("helical"), "n_tm_beta": tm_kind.count("beta"),
-        "intramem_start": [_seg(f)[0] for f in intra], "intramem_end": [_seg(f)[1] for f in intra],
+        "intramem_start": [a for a, _ in intra_segs], "intramem_end": [b for _, b in intra_segs],
         "n_intramem": len(intra), "n_lipid": len(lipid),
         "lipid_desc": "; ".join(sorted({f.get("description", "") for f in lipid})),
         "subcellular_location": "; ".join(locs), "topology": "; ".join(topos),
