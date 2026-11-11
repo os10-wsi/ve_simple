@@ -12,3 +12,5 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+shape_analysis/results/
+shape_analysis/lsf/logs/

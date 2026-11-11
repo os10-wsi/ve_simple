@@ -1,0 +1,8 @@
+protein	accession	unit	domain	expectation	check	belt	n_res	rg_ca	rg_ca_over_rmin_empirical	a_over_c	kappa2	prolateness	solidity_ses	sphericity_hull	frac_helix	inversion_index_kd	belt_width_scan_A_kd	belt_contrast_scan_kd	belt_normal_angle_pa1_kd	note
+lysozyme-like globular domain	P61626	DOMAIN	TED01	a/c 1.2-1.5, Rg/Rmin ~1, no belt	FAIL	False	121.0	13.401	0.985	1.591	0.089	0.049	0.597	0.933	0.438	-3.657				
+spectrin repeat (rod)	Q13813	DOMAIN	TED02	rod: a/c > 3, kappa2 high	PASS	False	193.0	32.001	1.969	6.536	0.82	1.484	0.381	0.755	0.881	-4.134	124.0	0.615	9.964	
+7TM GPCR (ADRB2)	P07550	CHAIN_TRIMMED		belt detected	PASS	True	282.0	20.324	1.083	2.046	0.206	0.175	0.493	0.901	0.865	-0.022	36.0	2.877	3.059	
+12TM transporter (GLUT1)	P11166	CHAIN_TRIMMED		belt detected	PASS	True	411.0	20.986	0.969	1.707	0.077	-0.009	0.55	0.924	0.832	-1.281	28.0	3.077	18.814	
+mitochondrial VDAC barrel	P21796	CHAIN_TRIMMED		beta-barrel class (belt reported, not required)	PASS	False	276.0	20.892	1.122	1.357	0.029	-0.002	0.408	0.93	0.051	-0.734	28.0	0.958	66.476	
+long coiled coil (TPM1)	P09493	CHAIN_TRIMMED:no_ted		rod: a/c > 5, helix > 90% (TED has no domain)	PASS	False	266.0	112.835	6.146	26.868	0.99	1.971		0.511	1.0					
+intrinsically disordered (SNCA)	P37840	CHAIN_FULL		Rg/Rmin >> 1 on CHAIN_FULL; little survives trimming	PASS	True	140.0	43.035	2.991	5.542	0.648	1.012	0.11	0.738	0.643	-0.238	16.0	2.05	89.025	CHAIN_TRIMMED keeps 0 of 140 residues
