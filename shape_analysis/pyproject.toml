@@ -9,7 +9,7 @@ description = "Proteome-wide protein and domain shape, compactness and hydrophob
 requires-python = ">=3.10"
 dependencies = [
   "numpy", "pandas", "scipy", "scikit-learn", "scikit-image", "pyarrow", "freesasa", "mdtraj",
-  "biopython", "requests", "matplotlib", "seaborn", "umap-learn", "nbformat", "nbconvert", "ipykernel",
+  "biopython", "requests", "matplotlib", "seaborn", "umap-learn", "nbformat", "nbconvert", "ipykernel", "tabulate",
 ]
 
 [project.scripts]
