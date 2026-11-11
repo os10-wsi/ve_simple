@@ -29,6 +29,7 @@ GROUPS = ["MEMBRANE_DOMAIN", "SOLUBLE_DOMAIN_OF_MEMBRANE_PROTEIN", "SOLUBLE_DOMA
 PAIRS = [("MEMBRANE_DOMAIN", "SOLUBLE_DOMAIN"), ("MEMBRANE_DOMAIN", "SOLUBLE_DOMAIN_OF_MEMBRANE_PROTEIN"),
          ("SOLUBLE_DOMAIN_OF_MEMBRANE_PROTEIN", "SOLUBLE_DOMAIN")]
 HYDRO = ["h_depth_slope_kd", "inversion_index_kd", "belt_width_scan_A_kd", "belt_contrast_scan_kd",
+         "belt_contrast_flanked_kd",
          "hydrophobic_rg_ratio_kd", "h_depth_slope_atom", "inversion_index_atom", "h_mean_kd", "hmoment_kd"]
 SHAPE = ["a_over_c", "kappa2", "prolateness", "asphericity", "acylindricity", "rg_ca_over_rmin_empirical",
          "solidity_ses", "sphericity_hull", "dmax_over_2rg"]

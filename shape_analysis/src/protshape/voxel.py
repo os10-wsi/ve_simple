@@ -156,16 +156,17 @@ def voxel_metrics(coords: np.ndarray, radii: np.ndarray, atom_h: dict[str, np.nd
         out.update(_belt(pos, h, centre, principal_axes[:, 0], f"_{s}"))
         scan = slab_scan(pos[shell], h[shell], centre)
         out[f"belt_contrast_scan_{s}"] = scan["contrast"]
-        out[f"belt_normal_angle_pa1_{s}"] = float(np.degrees(np.arccos(min(1.0, abs(scan["normal"] @ principal_axes[:, 0])))))\
-            if scan["normal"] is not None else np.nan
-        if scan["normal"] is not None:
-            b = _belt(pos[shell], h[shell], centre, scan["normal"], "")
+        out[f"belt_contrast_flanked_{s}"] = scan["contrast_flanked"]
+        normal = scan["normal_flanked"] if scan["normal_flanked"] is not None else scan["normal"]
+        if normal is not None:
+            out[f"belt_normal_angle_pa1_{s}"] = float(np.degrees(np.arccos(min(1.0, abs(normal @ principal_axes[:, 0])))))
+            b = _belt(pos[shell], h[shell], centre, normal, "")
             out[f"belt_width_scan_A_{s}"] = b["belt_width_A"]
             out[f"belt_center_scan_A_{s}"] = b["belt_center_A"]
             out[f"belt_profile_contrast_scan_{s}"] = b["belt_contrast"]
         else:
-            out.update({f"belt_width_scan_A_{s}": np.nan, f"belt_center_scan_A_{s}": np.nan,
-                        f"belt_profile_contrast_scan_{s}": np.nan})
+            out.update({f"belt_normal_angle_pa1_{s}": np.nan, f"belt_width_scan_A_{s}": np.nan,
+                        f"belt_center_scan_A_{s}": np.nan, f"belt_profile_contrast_scan_{s}": np.nan})
         if s == "kd":
             out["radial_profile_kd"] = _radial(pos, h, centre, principal_axes[:, 0])
             rp = out["radial_profile_kd"]
@@ -228,37 +229,41 @@ DIRECTIONS = _hemisphere(200)
 
 
 def slab_scan(pos: np.ndarray, h: np.ndarray, centre: np.ndarray, thickness: float = 30.0,
-              min_flank: float = 0.10) -> dict:
+              min_out: float = 0.10) -> dict:
     """Most hydrophobic 30 A slab of the surface shell over 200 directions and all slab positions.
 
-    contrast = mean H inside the slab - mean H outside it, requiring at least `min_flank` of the shell
-    on EACH side of the slab (a belt must be flanked by surface on both faces).
+    contrast = mean H inside the slab - mean H outside it. Two versions are returned:
+    * ``contrast``: at least `min_out` of the shell outside the slab (defined for almost every unit);
+    * ``contrast_flanked``: at least `min_out` of the shell on EACH side, the shape of a membrane belt.
+      Units shorter than about 50 A in every direction cannot hold a flanked 30 A slab (NaN).
     """
-    best = {"contrast": np.nan, "normal": None, "offset": np.nan}
+    best = {"contrast": np.nan, "normal": None, "contrast_flanked": np.nan, "normal_flanked": None}
     if len(h) < 100:
         return best
     d = pos - centre
     tot_n, tot_h = len(h), h.sum()
+    w = int(thickness)
     for v in DIRECTIONS:
         t = d @ v
         k = np.floor(t - t.min()).astype(int)                     # 1 A bins
         cnt = np.bincount(k)
         sh = np.bincount(k, weights=h)
         cc, ch = np.concatenate([[0], np.cumsum(cnt)]), np.concatenate([[0], np.cumsum(sh)])
-        w = int(thickness)
         if len(cnt) <= w:
             continue
         lo = np.arange(0, len(cnt) - w + 1)
         n_in = cc[lo + w] - cc[lo]
         h_in = ch[lo + w] - ch[lo]
         n_below, n_above = cc[lo], tot_n - cc[lo + w]
-        ok = (n_below >= min_flank * tot_n) & (n_above >= min_flank * tot_n) & (n_in > 0)
-        if not ok.any():
-            continue
-        con = np.where(ok, h_in / np.maximum(n_in, 1) - (tot_h - h_in) / np.maximum(tot_n - n_in, 1), -np.inf)
-        i = int(np.argmax(con))
-        if not np.isfinite(best["contrast"]) or con[i] > best["contrast"]:
-            best = {"contrast": float(con[i]), "normal": v, "offset": float(lo[i] + w / 2 + t.min())}
+        con = h_in / np.maximum(n_in, 1) - (tot_h - h_in) / np.maximum(tot_n - n_in, 1)
+        base = (n_in > 0) & (n_below + n_above >= min_out * tot_n)
+        for key, normal_key, ok in (("contrast", "normal", base),
+                                    ("contrast_flanked", "normal_flanked",
+                                     base & (n_below >= min_out * tot_n) & (n_above >= min_out * tot_n))):
+            if ok.any():
+                c = float(np.max(np.where(ok, con, -np.inf)))
+                if not np.isfinite(best[key]) or c > best[key]:
+                    best[key], best[normal_key] = c, v
     return best
 
 

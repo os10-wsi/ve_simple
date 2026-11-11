@@ -18,7 +18,7 @@ SANITY = [
 ]
 SANITY_IDS = [a for _, a, *_ in SANITY]
 COLS = ["n_res", "rg_ca", "rg_ca_over_rmin_empirical", "a_over_c", "kappa2", "prolateness", "solidity_ses",
-        "sphericity_hull", "frac_helix", "inversion_index_kd", "belt_width_scan_A_kd", "belt_contrast_scan_kd",
+        "sphericity_hull", "frac_helix", "inversion_index_kd", "belt_width_scan_A_kd", "belt_contrast_scan_kd", "belt_contrast_flanked_kd",
         "belt_normal_angle_pa1_kd"]
 
 
@@ -39,7 +39,7 @@ def sanity_table(m: pd.DataFrame) -> pd.DataFrame:
         if r is None:
             rows.append({"protein": label, "accession": acc, "unit": unit, "expectation": expect, "check": "MISSING"})
             continue
-        belt = belt_detected(r.get("belt_width_scan_A_kd", np.nan), r.get("belt_contrast_scan_kd", np.nan))
+        belt = belt_detected(r.get("belt_width_scan_A_kd", np.nan), r.get("belt_contrast_flanked_kd", np.nan))
         ok = {
             "P61626": 1.2 <= r.a_over_c <= 1.5 and 0.9 <= r.rg_ca_over_rmin_empirical <= 1.1 and not belt,
             "Q13813": r.a_over_c > 3 and r.kappa2 > 0.5,

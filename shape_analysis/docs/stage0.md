@@ -1,4 +1,41 @@
-# Stage 0 report (development sandbox, 200 proteins + sanity set)
+# Stage 0 report
+
+## Cluster run (farm22, your cache, 11 Nov 2026)
+
+| quantity | value |
+|---|---|
+| cached proteins indexed (human / yeast) | 20,406 / 6,733; 20,251 / 6,723 with an AlphaFold model |
+| listed accessions without a model | 178 human, 10 yeast (`results/missing_*.txt`) |
+| human proteins analysed as F1 fragment only | 123 |
+| TED queried / failed | 26,974 / 0 |
+| Stage 0 proteins / errors / time | 207 / 0 / 191 s on 8 cores |
+
+Class counts for the whole cache (`class_annotation`):
+
+| | SOLUBLE | MULTIPASS | SINGLE_PASS | BETA_BARREL | AMBIGUOUS |
+|---|---|---|---|---|---|
+| human | 12,491 | 2,824 | 2,389 | 14 | 2,688 |
+| yeast | 4,622 | 961 | 535 | 4 | 611 |
+
+The cluster sample is a different random draw from the sandbox one, so its belt confusion matrix is a
+first out-of-sample check of the 2.0 threshold: MULTIPASS 74 detected / 20 not, SOLUBLE 8 / 73
+(sensitivity 0.79, specificity 0.90). Sanity results were identical to the sandbox run.
+
+### Fix after the cluster run: belt score missing for small domains
+
+The flanked slab score was undefined for any unit too small to hold a 30 A slab with surface on both
+sides (maximum dimension below ~50 A): 89% of soluble domains under 80 residues and 61% of those with
+80-150. Belt comparisons were therefore made on a size- and shape-selected subset. Now:
+
+* `belt_contrast_scan_*`: best 30 A slab with at least 10% of the surface outside it (defined for
+  95-100% of domains in every size bin);
+* `belt_contrast_flanked_*`: the previous score, flanked on both sides; still used for the structural
+  cross-check, whose threshold was calibrated on it (cross-check results unchanged).
+
+With all soluble domains included, the belt score's membrane-vs-soluble AUC is 0.78, not the 0.95 the
+selected subset gave. The flanked score remains 0.955 on the domains where it exists.
+
+# Development sandbox run (200 proteins + sanity set)
 
 Run on 200 proteins (50 MULTIPASS + 50 SOLUBLE per organism, random, seed 0) drawn from a random
 pool of reviewed human and yeast proteins downloaded into a ve_simple-layout cache, plus the 7

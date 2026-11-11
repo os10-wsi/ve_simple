@@ -65,7 +65,7 @@ def cmd_classify(args) -> int:
     mpath = work / "metrics.parquet"
     if mpath.exists():
         m = pd.read_parquet(mpath, columns=["accession", "unit", "mask_variant", "belt_width_scan_A_kd",
-                                            "belt_contrast_scan_kd"])
+                                            "belt_contrast_flanked_kd"])
         cls = add_final_class(cls, m)
         print("Confusion (annotation class x belt detected on CHAIN_TRIMMED):")
         print(pd.crosstab(cls["class_annotation"], cls["belt_detected"].fillna("no unit")).to_string())

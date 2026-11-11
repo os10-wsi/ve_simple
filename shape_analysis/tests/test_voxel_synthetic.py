@@ -100,3 +100,11 @@ def test_belt_scan_finds_band_off_the_principal_axis():
     m, _ = run(p, h=h)
     assert m["belt_normal_angle_pa1_kd"] > 80                  # normal is perpendicular to axis 1
     assert 20 <= m["belt_width_scan_A_kd"] <= 36 and m["belt_contrast_scan_kd"] > 1.0
+
+
+def test_belt_scan_defined_for_small_domains():
+    """A ~40 A globule cannot hold a flanked 30 A slab, but the unflanked score must still exist."""
+    p = lattice_in(lambda p: np.linalg.norm(p, axis=1) < 18, 18)
+    m, _ = run(p, h=np.where(p[:, 2] > 5, -1.0, 0.5))
+    assert np.isfinite(m["belt_contrast_scan_kd"])
+    assert np.isnan(m["belt_contrast_flanked_kd"])

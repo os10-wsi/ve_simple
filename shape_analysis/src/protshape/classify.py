@@ -11,8 +11,8 @@ MEMBRANE_CLASSES = ("MULTIPASS", "SINGLE_PASS", "BETA_BARREL_MEMBRANE")
 _OMM_BARREL = re.compile(r"mitochondrial porin|tom40|sam50|omp85", re.I)
 
 # Structural belt detector (CHAIN_TRIMMED unit, Kyte-Doolittle, surface shell): the most hydrophobic
-# 30 A slab over 200 directions (voxel.slab_scan) must be at least BELT_MIN_CONTRAST more hydrophobic
-# than the rest of the surface. The slab thickness encodes the 25-35 A bilayer core, so no separate width
+# 30 A slab over 200 directions, flanked by surface on both sides (voxel.slab_scan, `belt_contrast_flanked_kd`),
+# must be at least BELT_MIN_CONTRAST more hydrophobic than the rest of the surface. The slab thickness encodes the 25-35 A bilayer core, so no separate width
 # condition is applied (the run-above-median width did not separate classes on Stage 0).
 # Threshold chosen on the Stage 0 sample (class medians 1.1 soluble vs 2.5 multipass): see docs/stage0.md.
 BELT_MIN_CONTRAST = 2.0
@@ -63,7 +63,7 @@ def add_final_class(classes: pd.DataFrame, metrics: pd.DataFrame) -> pd.DataFram
     soluble part, so they are left unchanged."""
     t = metrics[(metrics["unit"] == "CHAIN_TRIMMED") & (metrics["mask_variant"] == "default")]
     t = t.set_index("accession")
-    belt = {a: belt_detected(r.get("belt_width_scan_A_kd", np.nan), r.get("belt_contrast_scan_kd", np.nan))
+    belt = {a: belt_detected(r.get("belt_width_scan_A_kd", np.nan), r.get("belt_contrast_flanked_kd", np.nan))
             for a, r in t.iterrows()}
     out = classes.copy()
     out["belt_detected"] = out["accession"].map(belt)
