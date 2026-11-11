@@ -152,6 +152,8 @@ def cmd_collect(args) -> int:
     if m.empty:
         print("no computed metrics found")
         return 1
+    st = st[st.metrics_version == METRICS_VERSION]
+    m = m[m.metrics_version == METRICS_VERSION]           # ignore rows computed by older versions
     ok = st[st.status == "ok"][["accession", "model_version"]]
     m = m.merge(ok, on=["accession", "model_version"]).drop_duplicates(
         ["accession", "unit", "mask_variant", "domain_id"], keep="last")

@@ -203,6 +203,6 @@ def collect(out_dir: Path) -> dict[str, pd.DataFrame]:
         files = sorted(parts.glob(f"{kind}-*.parquet"))
         out[kind] = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True) if files else pd.DataFrame()
     if len(out["status"]):
-        # keep the newest status per accession; drop metric rows of superseded runs
-        out["status"] = out["status"].drop_duplicates("accession", keep="last")
+        # newest status per accession (parts are named by time, so the last one wins)
+        out["status"] = out["status"].drop_duplicates(["accession", "metrics_version"], keep="last")
     return out
