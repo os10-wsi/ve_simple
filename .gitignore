@@ -14,3 +14,7 @@ dist/
 .pytest_cache/
 shape_analysis/results/
 shape_analysis/lsf/logs/
+membrane_analysis/data*/
+membrane_analysis/figures*/
+membrane_analysis/executed/
+membrane_analysis/lsf/logs/

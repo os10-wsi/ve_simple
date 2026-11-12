@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mvsa"
+version = "0.1.0"
+description = "Membrane vs soluble proteins: clinical variant-effect prediction, score dynamic range and structure"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "scikit-learn", "matplotlib", "pyarrow", "nbformat", "nbconvert", "ipykernel", "tabulate"]
+
+[project.optional-dependencies]
+widgets = ["ipywidgets"]
+
+[tool.setuptools.packages.find]
+include = ["mvsa*"]
