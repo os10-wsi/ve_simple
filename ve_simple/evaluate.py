@@ -56,13 +56,22 @@ def delong_auc_variance(pos: np.ndarray, neg: np.ndarray) -> tuple[float, float]
 
 def bootstrap_ci(pos: np.ndarray, neg: np.ndarray, n_boot: int = 1000, alpha: float = 0.05,
                  seed: int = 0) -> tuple[float, float]:
+    """Stratified bootstrap percentile CI of the AUC (positives and negatives resampled separately).
+
+    All resamples are scored at once from ranks: AUC = (sum of positive ranks - n1(n1+1)/2) / (n1 n2),
+    with average ranks for ties, which equals the Mann-Whitney / roc_auc_score value.
+    """
     rng = np.random.default_rng(seed)
-    aucs = np.empty(n_boot)
-    for b in range(n_boot):
-        p = rng.choice(pos, size=len(pos), replace=True)
-        q = rng.choice(neg, size=len(neg), replace=True)
-        y = np.r_[np.ones(len(p)), np.zeros(len(q))]
-        aucs[b] = roc_auc_score(y, np.r_[p, q])
+    n1, n2 = len(pos), len(neg)
+    per = max(1, int(4_000_000 // (n1 + n2)))           # bound memory for very large proteins
+    aucs = []
+    for start in range(0, n_boot, per):
+        b = min(per, n_boot - start)
+        p = pos[rng.integers(0, n1, size=(b, n1))]
+        q = neg[rng.integers(0, n2, size=(b, n2))]
+        r = stats.rankdata(np.concatenate([p, q], axis=1), axis=1)
+        aucs.append((r[:, :n1].sum(axis=1) - n1 * (n1 + 1) / 2) / (n1 * n2))
+    aucs = np.concatenate(aucs)
     return float(np.quantile(aucs, alpha / 2)), float(np.quantile(aucs, 1 - alpha / 2))
 
 

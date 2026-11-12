@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
@@ -65,3 +66,21 @@ def test_delong_se_matches_bootstrap_sd():
         boots.append(roc_auc_score(np.r_[np.ones(len(p)), np.zeros(len(q))], np.r_[p, q]))
     assert 0.5 * np.std(boots) < np.sqrt(var) < 1.5 * np.std(boots)
     assert np.sqrt(var) < 0.06
+
+
+def test_vectorised_bootstrap_matches_definition():
+    from ve_simple.evaluate import bootstrap_ci
+
+    rng = np.random.default_rng(5)
+    pos = np.round(rng.normal(1.0, 1, 80), 1)      # rounding creates ties
+    neg = np.round(rng.normal(0.0, 1, 40), 1)
+    lo, hi = bootstrap_ci(pos, neg, n_boot=2000, seed=1)
+    auc, var = delong_auc_variance(pos, neg)
+    assert lo < auc < hi
+    assert (hi - lo) == pytest.approx(2 * 1.96 * np.sqrt(var), rel=0.25)
+    # a single resample scored by ranks equals sklearn's AUC
+    y = np.r_[np.ones(len(pos)), np.zeros(len(neg))]
+    from scipy import stats
+    r = stats.rankdata(np.r_[pos, neg])
+    assert (r[:len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)) == pytest.approx(
+        roc_auc_score(y, np.r_[pos, neg]))
