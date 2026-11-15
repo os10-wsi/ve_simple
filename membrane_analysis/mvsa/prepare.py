@@ -51,26 +51,41 @@ def residue_context(shape: Path, classes: pd.DataFrame, ann: pd.DataFrame) -> pd
         for a, b in zip(r.intramem_start, r.intramem_end):
             seg.append((r.accession, int(a), int(b)))
     seg = pd.DataFrame(seg, columns=["accession", "start", "end"])
-    res["in_tm"] = False
-    res["juxta"] = False
-    if len(seg):
-        idx = res.set_index("accession").index
-        for acc, g in seg.groupby("accession"):
-            m = idx == acc
-            if not m.any():
-                continue
-            pos = res.loc[m, "position"].to_numpy()
-            in_tm = np.zeros(len(pos), bool)
-            near = np.zeros(len(pos), bool)
-            for a, b in zip(g.start, g.end):
-                in_tm |= (pos >= a) & (pos <= b)
-                near |= (pos >= a - JUXTA) & (pos <= b + JUXTA)
-            res.loc[m, "in_tm"] = in_tm
-            res.loc[m, "juxta"] = near & ~in_tm
+    res = res.reset_index(drop=True)
+    in_tm, juxta = _tm_flags(res["accession"].to_numpy(), res["position"].to_numpy(), seg)
+    res["in_tm"] = in_tm
+    res["juxta"] = juxta
     cls = classes.set_index("accession")["class_annotation"]
     res["protein_class"] = res["accession"].map(cls)
     res["location"] = assign_location(res["protein_class"], res["in_tm"], res["juxta"], res["rsa"])
     return res
+
+
+def _tm_flags(acc: np.ndarray, pos: np.ndarray, seg: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """In-TM and juxtamembrane flags per residue.  Residues are grouped by accession once, so each
+    protein's segments touch only its own rows (linear in the number of residues)."""
+    in_tm = np.zeros(len(pos), bool)
+    near = np.zeros(len(pos), bool)
+    if not len(seg) or not len(pos):
+        return in_tm, near
+    codes, uniq = pd.factorize(acc)
+    order = np.argsort(codes, kind="stable")
+    bounds = np.searchsorted(codes[order], np.arange(len(uniq) + 1))
+    lookup = {a: i for i, a in enumerate(uniq)}
+    for a, g in seg.groupby("accession"):
+        k = lookup.get(a)
+        if k is None:
+            continue
+        rows = order[bounds[k]:bounds[k + 1]]
+        p = pos[rows]
+        t = np.zeros(len(p), bool)
+        n = np.zeros(len(p), bool)
+        for s0, e0 in zip(g["start"].to_numpy(), g["end"].to_numpy()):
+            t |= (p >= s0) & (p <= e0)
+            n |= (p >= s0 - JUXTA) & (p <= e0 + JUXTA)
+        in_tm[rows] = t
+        near[rows] = n
+    return in_tm, near & ~in_tm
 
 
 def assign_location(protein_class: pd.Series, in_tm: pd.Series, juxta: pd.Series, rsa: pd.Series) -> pd.Series:
@@ -137,7 +152,55 @@ def stream_variants(path: Path, residues: pd.DataFrame, classes: pd.DataFrame, s
     if carry is not None and len(carry):
         _process(carry, ctx, cls, rng, sample_rate, labelled, sample, summaries)
     cat = lambda xs: pd.concat(xs, ignore_index=True) if xs else pd.DataFrame()
-    return cat(labelled), cat(sample), pd.DataFrame(summaries)
+    return cat(labelled), cat(sample), cat(summaries)
+
+
+QUANTS = {"q05": 0.05, "q25": 0.25, "median": 0.5, "q75": 0.75, "q95": 0.95}
+
+
+def summarise_chunk(df: pd.DataFrame, region_col: str = "region") -> pd.DataFrame:
+    """Vectorised summarise_protein over every protein in df (same numbers).  Groups are integer
+    codes computed once per chunk; grouping on strings per predictor was the slow part."""
+    out = []
+    acc_code, acc_uniq = pd.factorize(df["accession"], sort=False)
+    reg_code, reg_uniq = pd.factorize(df[region_col].astype(str), sort=False)
+    pos = df["position"].to_numpy(np.int64)
+    span = int(pos.max()) + 1 if len(pos) else 1
+    nreg = len(reg_uniq) + 1                       # last region code means "all"
+    keysets = {"all": acc_code.astype(np.int64) * nreg + (nreg - 1),
+               "region": acc_code.astype(np.int64) * nreg + reg_code}
+    regions = np.append(np.asarray(reg_uniq, dtype=object), "all")
+    for p, sign in DIRECTION.items():
+        if p not in df:
+            continue
+        v = pd.to_numeric(df[p], errors="coerce").to_numpy(float) * sign
+        ok = np.isfinite(v)
+        if not ok.any():
+            continue
+        for key in keysets.values():
+            gid = key[ok]
+            d = pd.DataFrame({"g": gid, "gp": gid * span + pos[ok], "v": v[ok]})
+            g = d.groupby("g", sort=False)["v"]
+            st = pd.DataFrame({"n": g.size(), "mean": g.mean(), "sd": g.std(ddof=0)})
+            st = st[st["n"] >= 19]
+            if not len(st):
+                continue
+            q = g.quantile(list(QUANTS.values())).unstack()
+            q.columns = list(QUANTS)
+            pg = d.groupby("gp", sort=False)["v"]
+            pstat = pd.DataFrame({"m": pg.mean(), "s": pg.std()})
+            pstat["g"] = pstat.index.to_numpy() // span
+            st = st.join(q).join(pstat.groupby("g")["m"].std().rename("between_position_sd")) \
+                   .join(pstat.groupby("g")["s"].mean().rename("within_position_sd"))
+            st["dynamic_range"] = st["q95"] - st["q05"]
+            gi = st.index.to_numpy()
+            st.insert(0, "accession", np.asarray(acc_uniq, dtype=object)[gi // nreg])
+            st.insert(1, "region", regions[gi % nreg])
+            st["predictor"] = p
+            out.append(st.reset_index(drop=True))
+    cols = ["accession", "region", "predictor", "n", "mean", "sd", *QUANTS, "dynamic_range",
+            "between_position_sd", "within_position_sd"]
+    return pd.concat(out, ignore_index=True)[cols] if out else pd.DataFrame(columns=cols)
 
 
 def _process(df, ctx, cls, rng, sample_rate, labelled, sample, summaries):
@@ -148,8 +211,7 @@ def _process(df, ctx, cls, rng, sample_rate, labelled, sample, summaries):
     lab = df["clinvar_class"].notna() & (df["clinvar_class"].astype(str) != "")
     labelled.append(df[lab])
     sample.append(df[rng.random(len(df)) < sample_rate])
-    for _, g in df.groupby("accession", sort=False):
-        summaries.extend(summarise_protein(g))
+    summaries.append(summarise_chunk(df))
 
 
 def check_inputs(ve: Path, shape: Path) -> None:
