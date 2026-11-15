@@ -505,7 +505,7 @@ def run_pipeline(cfg: Config) -> dict:
     """Process proteins in batches; stream per-variant results to disk so memory stays bounded."""
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    db = None if cfg.cache_only else ResultsDB(out / "ve_simple.sqlite")
+    db = None if cfg.cache_only else ResultsDB(out / "ve_simple.sqlite", fresh=True)
     zen = prepare_thermompnn_archive(cfg)
     prepare_alphamissense(cfg)
     pool = ScorerPool(cfg)
@@ -580,6 +580,8 @@ def run_pipeline(cfg: Config) -> dict:
     if cfg.make_pdf and labelled_frames:
         labelled = pd.concat(labelled_frames, ignore_index=True)
         pdf = roc_pdf(labelled, human, out / "roc_curves.pdf", predictors=cfg.plot_predictors)
+    log.info("indexing the results database")
+    db.finish()
     db.close()
     summary = {
         "n_requested": len(cfg.ids), "n_proteins": len(prot_rows), "n_human": int(len(human)),
