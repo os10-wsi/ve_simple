@@ -4,12 +4,14 @@
 # data_<name>/ and lsf/logs/prepare_<name>.log, with <name> taken from the results folder
 # (results_human -> human) unless given.
 # Usage: bash lsf/prepare.sh VE_RESULTS [SHAPE_RESULTS] [NAME]
+# AFTER=<job name> makes the job wait for that job to finish successfully, e.g.
+#   AFTER=ve_merge_uniprot_reviewed_9606 bash lsf/prepare.sh ../results_human
 set -euo pipefail
 VE=${1:?ve_simple results directory, e.g. ../results_human}
 SHAPE=${2:-../shape_analysis/results}
 NAME=${3:-$(basename "$VE" | sed 's/^results_//')}
 mkdir -p lsf/logs
-bsub -q "${CPU_QUEUE:-normal}" -J "mvsa_prepare_${NAME}" -n 2 -M 48000 -R "select[mem>48000] rusage[mem=48000]" \
+bsub -q "${CPU_QUEUE:-normal}" -J "mvsa_prepare_${NAME}" ${AFTER:+-w "done($AFTER)"} -n 2 -M 48000 -R "select[mem>48000] rusage[mem=48000]" \
      -o "lsf/logs/prepare_${NAME}.log" \
      "source ../.venv/bin/activate && python -m mvsa.prepare --ve $VE --shape $SHAPE --out data_${NAME}"
 echo "submitted: data_${NAME}/ (log lsf/logs/prepare_${NAME}.log)"
