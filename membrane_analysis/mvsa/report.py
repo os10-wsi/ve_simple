@@ -91,7 +91,11 @@ def structure_takeaway(contrasts: pd.DataFrame, comparator: str = "SOLUBLE", top
 
 
 def summary_table(pooled, matched, thr, calib, dyn, contrasts) -> pd.DataFrame:
-    """One row per headline contrast: multipass vs soluble, with estimate and CI where available."""
+    """One row per headline contrast: multipass vs soluble, with estimate and CI where available.
+    Inputs from sections that were skipped (no ClinVar labels) may be empty."""
+    empty = pd.DataFrame(columns=["class", "estimate", "threshold", "predictor", "metric", "unit"])
+    pooled, matched, thr, calib, dyn, contrasts = [x if isinstance(x, pd.DataFrame) and len(x) else empty
+                                                  for x in (pooled, matched, thr, calib, dyn, contrasts)]
     rows = []
     for r in pooled[pooled["class"] == "SOLUBLE"].itertuples():
         rows.append({"section": "(i) performance", "measure": "pooled AUC difference (MP - SOL)", "item": r.predictor,
@@ -104,7 +108,7 @@ def summary_table(pooled, matched, thr, calib, dyn, contrasts) -> pd.DataFrame:
         if len(so):
             rows.append({"section": "(ii) error", "measure": "false-negative rate difference (MP - SOL)",
                          "item": r.predictor, "estimate": r.fnr - so.fnr.iat[0], "low": np.nan, "high": np.nan, "q": np.nan})
-    if len(calib):
+    if len(calib) and "ece_prevalence_adjusted" in calib:
         w = calib.pivot_table(index="predictor", columns="class", values="ece_prevalence_adjusted")
         for p, r in w.iterrows():
             if MEMBRANE in r and "SOLUBLE" in r:

@@ -181,7 +181,11 @@ def main(argv=None) -> int:
     sample.to_parquet(args.out / "variant_sample.parquet", index=False)
     summaries.to_parquet(args.out / "protein_scores.parquet", index=False)
 
-    auc = pd.read_csv(args.ve / "auc_long.tsv", sep="\t")
+    try:
+        auc = pd.read_csv(args.ve / "auc_long.tsv", sep="\t")
+    except pd.errors.EmptyDataError:            # no ClinVar labels (e.g. yeast): no per-protein AUCs
+        auc = pd.DataFrame(columns=["accession", "predictor", "n_pathogenic", "n_benign", "n_scored", "auc",
+                                    "auc_se", "ci_low", "ci_high"])
     auc.to_parquet(args.out / "protein_auc.parquet", index=False)
 
     keep = ["accession", "taxid", "protein_class", "unit", "mask_variant", "domain_id", "domain_label", "cath_class",
@@ -203,7 +207,11 @@ def main(argv=None) -> int:
     prot = prot.merge(plddt, left_on="accession", right_index=True, how="left")
     prot["in_ve_results"] = prot["accession"].isin(set(ve_prot["accession"]))
     prot.to_parquet(args.out / "proteins.parquet", index=False)
+    taxa = prot.loc[prot.in_ve_results, "taxid"]
     meta = {"ve_results": str(args.ve.resolve()), "shape_results": str(args.shape.resolve()),
+            "taxid": int(taxa.mode().iat[0]) if len(taxa) else None,
+            "n_labelled_pathogenic_benign": int(labelled["clinvar_class"].isin(
+                ["pathogenic", "likely_pathogenic", "benign", "likely_benign"]).sum()) if len(labelled) else 0,
             "sample_rate": args.sample_rate, "n_labelled": int(len(labelled)), "n_sample": int(len(sample)),
             "n_proteins_ve": int(prot.in_ve_results.sum()), "created": time.strftime("%Y-%m-%d %H:%M")}
     (args.out / "meta.json").write_text(json.dumps(meta, indent=1))

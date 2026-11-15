@@ -17,10 +17,13 @@ structural properties.
 
 ```bash
 pip install -e membrane_analysis
-cd membrane_analysis && bash lsf/prepare.sh ../results_human ../shape_analysis/results
+cd membrane_analysis
+bash lsf/prepare.sh ../results_human
+bash lsf/prepare.sh ../results_yeast
 ```
 
-This streams the full variant table once and writes `data/` (a few hundred MB): every
+Each run streams that proteome's variant table once and writes `data_<name>/` (`data_human/`,
+`data_yeast/`; the name comes from the results folder), so both can run at the same time: every
 ClinVar-labelled variant with all scores and residue context, a 1% random sample of all possible
 substitutions, per-protein score summaries, per-protein AUCs, shape metrics and per-residue context.
 
@@ -31,13 +34,18 @@ substitutions, per-protein score summaries, per-protein AUCs, shape metrics and 
 | `notebooks/membrane_vs_soluble.ipynb` | the narrative: sections (i) performance, (ii) dynamic range and error, (iii) structure, each ending in a generated takeaway; figures saved to `figures/` as PDF and PNG; summary table `figures/summary_multipass_vs_soluble.tsv` |
 | `notebooks/explore.ipynb` | browse any predictor, any structural metric, or one protein, for every class |
 
-Run the narrative on the cluster (it bootstraps over thousands of proteins; ~30-60 minutes on the full data):
+Run the narrative on the cluster, once per dataset (they can run at the same time; human takes
+~30-60 minutes because it bootstraps over thousands of proteins):
 
 ```bash
-bash lsf/run_notebook.sh
+bash lsf/run_notebook.sh human
+bash lsf/run_notebook.sh yeast
 ```
 
-It writes `executed/membrane_vs_soluble.executed.ipynb`, an HTML copy next to it, and `figures/`.
+Each writes `executed/membrane_vs_soluble_<name>.executed.ipynb`, an HTML copy, and `figures_<name>/`.
+Yeast has no ClinVar labels, so its notebook skips the clinical-performance, threshold, calibration and
+VUS sections and shows score distributions, dynamic range, predictor agreement and structure. The
+structural sections include both organisms in either run, because the shape results cover both.
 Open the explorer interactively in Jupyter on a compute node.
 
 Parameters at the top of each notebook: `INCLUDE_LIKELY`, `MIN_STARS` (ClinVar review filter),

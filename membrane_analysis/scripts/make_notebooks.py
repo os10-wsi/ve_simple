@@ -32,9 +32,17 @@ lab_all = D["labelled_variants"]
 lab = S.labels(lab_all, include_likely=INCLUDE_LIKELY, min_stars=MIN_STARS)     # pathogenic (y=1) / benign (y=0)
 lab = lab[lab.protein_class.notna()]
 sample = D["variant_sample"]
-PRED = [p for p in MAIN_PREDICTORS if p in available_predictors(lab)]
+TAXID = D["meta"].get("taxid") or HUMAN
+ORGANISM = {9606: "human", 559292: "yeast"}.get(TAXID, str(TAXID))
+HAS_LABELS = len(lab) >= 20 and lab.y.nunique() == 2      # yeast has no ClinVar: clinical sections are skipped
+SKIP = "No ClinVar pathogenic/benign labels in this dataset (" + ORGANISM + "): section skipped."
+PRED = [p for p in MAIN_PREDICTORS if p in available_predictors(lab if HAS_LABELS else sample)]
+pooled = matched = thr = calib = pd.DataFrame()           # filled by the clinical sections when labels exist
 VEP = [p for p in ("alphamissense", "esm1v", "saprot") if p in PRED]
-print("data:", D["meta"].get("created", "?"), "| predictors with data:", ", ".join(PRED))
+print("data:", D["meta"].get("created", "?"), "| organism:", ORGANISM, "| predictors with data:", ", ".join(PRED))
+if not HAS_LABELS:
+    display(Markdown(f"**{SKIP.replace('section skipped', 'clinical-performance, threshold, calibration and VUS sections are skipped')}** "
+                     "Score distributions, dynamic range, predictor agreement and structure are shown."))
 missing = [p for p in MAIN_PREDICTORS if p not in PRED]
 if missing:
     print("no data yet (skipped):", ", ".join(missing))'''
@@ -57,75 +65,33 @@ NARRATIVE = [
            "has no ClinVar); structural analyses use both organisms."),
     ("code", SETUP),
     ("md", "## 0. Data overview"),
-    ("code", "ov = A.overview(prot[prot.taxid == HUMAN], lab_all)\nov"),
-    ("code", "cov = pd.DataFrame({c: [lab.loc[lab.protein_class == c, p].notna().mean() for p in PRED] for c in CLASS_ORDER}, index=PRED)\n"
-             "print('Fraction of labelled variants with a score, by class:')\ncov.round(2)"),
+    ("code", "ov = A.overview(prot[prot.taxid == TAXID], lab_all)\nov"),
+    ("code", "src, what = (lab, 'labelled variants') if HAS_LABELS else (sample, 'sampled substitutions')\n"
+             "cov = pd.DataFrame({c: [src.loc[src.protein_class == c, p].notna().mean() for p in PRED] for c in CLASS_ORDER}, index=PRED)\n"
+             "print(f'Fraction of {what} with a score, by class:')\ncov.round(2)"),
 
     # -------------------------------------------------------------------------------- (i)
     ("md", "## 1. Clinical performance: pathogenic vs benign\n\n"
            "### 1.1 Pooled across proteins\nAUC over every labelled variant of each class, with protein-bootstrap 95% CIs. "
            "The right panel shows multipass minus each comparator; values below zero mean predictors do worse on multipass proteins."),
-    ("code", "pooled = A.pooled_performance(lab, PRED, n_boot=N_BOOT)\n"
-             "fig, ax = plt.subplots(1, 2, figsize=(12, 0.45 * len(PRED) + 1.6), gridspec_kw={'width_ratios': [1.2, 1]})\n"
-             "P.forest(pooled[pooled['class'].isin(CLASS_ORDER)], 'predictor', 'class', ax=ax[0], groups=CLASS_ORDER,\n"
-             "         title='AUC by protein class')\n"
-             "d = pooled[pooled['class'].isin(['SOLUBLE', 'NON_MULTIPASS'])].rename(columns={'mp_minus_delta': 'dd', 'mp_minus_delta_low': 'dl', 'mp_minus_delta_high': 'dh'})\n"
-             "P.forest(d, 'predictor', 'class', value='dd', lo='dl', hi='dh', ref=0, ax=ax[1], xlabel='AUC difference (multipass - comparator)',\n"
-             "         title='Multipass minus comparator')\n"
-             "ax[1].set_yticklabels([])\nfig.tight_layout(); P.save(fig, '1_1_pooled_auc')"),
-    ("code", "cols = ['predictor', 'class', 'n_proteins', 'n_pathogenic', 'n_benign', 'auc', 'ci_low', 'ci_high', 'mp_minus_delta', 'mp_minus_delta_low', 'mp_minus_delta_high', 'mp_minus_q']\n"
-             "pooled[cols].round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    pooled = A.pooled_performance(lab, PRED, n_boot=N_BOOT)\n    fig, ax = plt.subplots(1, 2, figsize=(12, 0.45 * len(PRED) + 1.6), gridspec_kw={'width_ratios': [1.2, 1]})\n    P.forest(pooled[pooled['class'].isin(CLASS_ORDER)], 'predictor', 'class', ax=ax[0], groups=CLASS_ORDER,\n             title='AUC by protein class')\n    d = pooled[pooled['class'].isin(['SOLUBLE', 'NON_MULTIPASS'])].rename(columns={'mp_minus_delta': 'dd', 'mp_minus_delta_low': 'dl', 'mp_minus_delta_high': 'dh'})\n    P.forest(d, 'predictor', 'class', value='dd', lo='dl', hi='dh', ref=0, ax=ax[1], xlabel='AUC difference (multipass - comparator)',\n             title='Multipass minus comparator')\n    ax[1].set_yticklabels([])\n    fig.tight_layout(); P.save(fig, '1_1_pooled_auc')"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    cols = ['predictor', 'class', 'n_proteins', 'n_pathogenic', 'n_benign', 'auc', 'ci_low', 'ci_high', 'mp_minus_delta', 'mp_minus_delta_low', 'mp_minus_delta_high', 'mp_minus_q']\n    display(pooled[cols].round(3))"),
     ("md", "### 1.2 ROC curves"),
-    ("code", "show = [p for p in ('alphamissense', 'esm1v', 'thermompnn', 'blosum62') if p in PRED]\n"
-             "fig, axes = plt.subplots(1, len(show), figsize=(3.6 * len(show), 3.4), squeeze=False)\n"
-             "for ax, p in zip(axes[0], show):\n"
-             "    for c, (fpr, tpr, a) in A.roc_curves(lab, p, ['MULTIPASS', 'SOLUBLE', 'SINGLE_PASS', 'AMBIGUOUS']).items():\n"
-             "        ax.plot(fpr, tpr, color=CLASS_COLOR[c], lw=2 if c == MEMBRANE else 1.3, label=f'{CLASS_LABEL[c]} {a:.2f}')\n"
-             "    ax.plot([0, 1], [0, 1], color=P.AXIS, lw=0.8); ax.set_title(P.label(p), loc='left')\n"
-             "    ax.set_xlabel('False positive rate'); ax.set_ylabel('True positive rate'); ax.legend(fontsize=7, loc='lower right')\n"
-             "fig.tight_layout(); P.save(fig, '1_2_roc')"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    show = [p for p in ('alphamissense', 'esm1v', 'thermompnn', 'blosum62') if p in PRED]\n    fig, axes = plt.subplots(1, len(show), figsize=(3.6 * len(show), 3.4), squeeze=False)\n    for ax, p in zip(axes[0], show):\n        for c, (fpr, tpr, a) in A.roc_curves(lab, p, ['MULTIPASS', 'SOLUBLE', 'SINGLE_PASS', 'AMBIGUOUS']).items():\n            ax.plot(fpr, tpr, color=CLASS_COLOR[c], lw=2 if c == MEMBRANE else 1.3, label=f'{CLASS_LABEL[c]} {a:.2f}')\n        ax.plot([0, 1], [0, 1], color=P.AXIS, lw=0.8); ax.set_title(P.label(p), loc='left')\n        ax.set_xlabel('False positive rate'); ax.set_ylabel('True positive rate'); ax.legend(fontsize=7, loc='lower right')\n    fig.tight_layout(); P.save(fig, '1_2_roc')"),
     ("md", "### 1.3 Per protein\nAUC inside each protein (from the ve_simple tables), for proteins with at least `MIN_PER_CLASS` pathogenic "
            "and benign variants. This removes any between-gene component but keeps fewer proteins."),
-    ("code", "pp, pp_comp = A.per_protein_performance(D['protein_auc'], PRED, MIN_PER_CLASS)\n"
-             "show = [p for p in PRED if p in set(pp.predictor)][:6]\n"
-             "fig, axes = plt.subplots(1, len(show), figsize=(3.3 * len(show), 3.4), squeeze=False)\n"
-             "for ax, p in zip(axes[0], show):\n"
-             "    P.class_violin(pp[pp.predictor == p], 'auc', [c for c in CLASS_ORDER if c != 'BETA_BARREL_MEMBRANE'], ax=ax, ylabel='per-protein AUC', title=P.label(p), ref=0.5)\n"
-             "fig.tight_layout(); P.save(fig, '1_3_per_protein_auc')\n"
-             "pp_comp.round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    pp, pp_comp = A.per_protein_performance(D['protein_auc'], PRED, MIN_PER_CLASS)\n    show = [p for p in PRED if p in set(pp.predictor)][:6]\n    fig, axes = plt.subplots(1, len(show), figsize=(3.3 * len(show), 3.4), squeeze=False)\n    for ax, p in zip(axes[0], show):\n        P.class_violin(pp[pp.predictor == p], 'auc', [c for c in CLASS_ORDER if c != 'BETA_BARREL_MEMBRANE'], ax=ax, ylabel='per-protein AUC', title=P.label(p), ref=0.5)\n    fig.tight_layout(); P.save(fig, '1_3_per_protein_auc')\n    display(pp_comp.round(3))"),
     ("md", "### 1.4 Where in the protein\nInside multipass proteins, variants are split by location: transmembrane segment facing the lipid "
            "(exposed in the AlphaFold model) or buried, juxtamembrane (within 5 residues of a TM segment), and extramembrane buried or exposed. "
            "Soluble proteins are split into buried and exposed residues for reference (relative SASA threshold 0.2)."),
-    ("code", "loc = A.location_performance(lab, PRED, n_boot=max(100, N_BOOT // 2))\n"
-             "loc['group'] = loc['class'].map({'MULTIPASS': 'Multipass', 'SOLUBLE': 'Soluble'}) + ': ' + loc['location']\n"
-             "show = [p for p in ('alphamissense', 'esm1v', 'saprot', 'thermompnn', 'blosum62') if p in PRED]\n"
-             "fig, axes = plt.subplots(1, len(show), figsize=(3.4 * len(show), 3.6), sharey=True, squeeze=False)\n"
-             "for ax, p in zip(axes[0], show):\n"
-             "    d = loc[loc.predictor == p].reset_index(drop=True)\n"
-             "    y = np.arange(len(d))\n"
-             "    for c in d['class'].unique():\n"
-             "        m = (d['class'] == c).to_numpy()\n"
-             "        ax.errorbar(d.auc[m], y[m], xerr=[(d.auc - d.ci_low)[m], (d.ci_high - d.auc)[m]], fmt='o', ms=6, elinewidth=1.4,\n"
-             "                    color=CLASS_COLOR[c], ecolor=CLASS_COLOR[c], mec='white')\n"
-             "    ax.axvline(0.5, color=P.AXIS, lw=1); ax.set_title(P.label(p), loc='left'); ax.set_xlabel('AUC')\n"
-             "    ax.set_yticks(y, [f\"{g} (n={a}/{b})\" for g, a, b in zip(d.group, d.n_pathogenic, d.n_benign)], fontsize=7)\n"
-             "axes[0][0].invert_yaxis(); fig.tight_layout(); P.save(fig, '1_4_auc_by_location')\n"
-             "loc[['predictor', 'class', 'location', 'n_proteins', 'n_pathogenic', 'n_benign', 'auc', 'ci_low', 'ci_high']].round(3)"),
+    ("code", 'if not HAS_LABELS:\n    print(SKIP)\nelse:\n    loc = A.location_performance(lab, PRED, n_boot=max(100, N_BOOT // 2))\n    loc[\'group\'] = loc[\'class\'].map({\'MULTIPASS\': \'Multipass\', \'SOLUBLE\': \'Soluble\'}) + \': \' + loc[\'location\']\n    show = [p for p in (\'alphamissense\', \'esm1v\', \'saprot\', \'thermompnn\', \'blosum62\') if p in PRED]\n    fig, axes = plt.subplots(1, len(show), figsize=(3.4 * len(show), 3.6), sharey=True, squeeze=False)\n    for ax, p in zip(axes[0], show):\n        d = loc[loc.predictor == p].reset_index(drop=True)\n        y = np.arange(len(d))\n        for c in d[\'class\'].unique():\n            m = (d[\'class\'] == c).to_numpy()\n            ax.errorbar(d.auc[m], y[m], xerr=[(d.auc - d.ci_low)[m], (d.ci_high - d.auc)[m]], fmt=\'o\', ms=6, elinewidth=1.4,\n                        color=CLASS_COLOR[c], ecolor=CLASS_COLOR[c], mec=\'white\')\n        ax.axvline(0.5, color=P.AXIS, lw=1); ax.set_title(P.label(p), loc=\'left\'); ax.set_xlabel(\'AUC\')\n        ax.set_yticks(y, [f"{g} (n={a}/{b})" for g, a, b in zip(d.group, d.n_pathogenic, d.n_benign)], fontsize=7)\n    axes[0][0].invert_yaxis(); fig.tight_layout(); P.save(fig, \'1_4_auc_by_location\')\n    display(loc[[\'predictor\', \'class\', \'location\', \'n_proteins\', \'n_pathogenic\', \'n_benign\', \'auc\', \'ci_low\', \'ci_high\']].round(3))'),
     ("md", "### 1.5 Is the gap explained by easier label mixes or structural context?\n"
            "*Matched* recomputes the AUC within strata of residue pLDDT, burial and the protein's fraction of pathogenic variants, "
            "weighting both classes by the multipass strata. *Within-protein* averages AUCs computed inside each protein. "
            "If the multipass deficit persists after both, it is not an artefact of which genes or residues happen to be labelled."),
-    ("code", "matched = A.matched_performance(lab, [p for p in PRED if p in ('alphamissense', 'esm1v', 'saprot', 'thermompnn', 'foldx', 'blosum62')], n_boot=max(50, N_BOOT // 3))\n"
-             "d = matched.copy(); d['group'] = d.estimate\n"
-             "fig, ax = plt.subplots(figsize=(6.5, 0.5 * d.predictor.nunique() + 1.5))\n"
-             "for j, (k, col) in enumerate(zip(['raw', 'matched', 'within-protein'], ['#8f8d85', '#eb6834', '#6250d6'])):\n"
-             "    s = d[d.estimate == k].reset_index(drop=True); y = np.arange(len(s)) + (j - 1) * 0.22\n"
-             "    ax.errorbar(s.delta, y, xerr=[s.delta - s.delta_low, s.delta_high - s.delta], fmt='o', color=col, label=k, ms=5)\n"
-             "ax.axvline(0, color=P.AXIS); ax.set_yticks(range(s.shape[0]), [P.label(p) for p in s.predictor]); ax.invert_yaxis()\n"
-             "ax.set_xlabel('AUC difference, multipass - soluble'); ax.legend(fontsize=8); fig.tight_layout(); P.save(fig, '1_5_matched')\n"
-             "display(Markdown(R.matched_takeaway(matched)))"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    matched = A.matched_performance(lab, [p for p in PRED if p in ('alphamissense', 'esm1v', 'saprot', 'thermompnn', 'foldx', 'blosum62')], n_boot=max(50, N_BOOT // 3))\n    d = matched.copy(); d['group'] = d.estimate\n    fig, ax = plt.subplots(figsize=(6.5, 0.5 * d.predictor.nunique() + 1.5))\n    for j, (k, col) in enumerate(zip(['raw', 'matched', 'within-protein'], ['#8f8d85', '#eb6834', '#6250d6'])):\n        s = d[d.estimate == k].reset_index(drop=True); y = np.arange(len(s)) + (j - 1) * 0.22\n        ax.errorbar(s.delta, y, xerr=[s.delta - s.delta_low, s.delta_high - s.delta], fmt='o', color=col, label=k, ms=5)\n    ax.axvline(0, color=P.AXIS); ax.set_yticks(range(s.shape[0]), [P.label(p) for p in s.predictor]); ax.invert_yaxis()\n    ax.set_xlabel('AUC difference, multipass - soluble'); ax.legend(fontsize=8); fig.tight_layout(); P.save(fig, '1_5_matched')\n    display(Markdown(R.matched_takeaway(matched)))"),
     ("md", "### Takeaway (i)"),
-    ("code", "display(Markdown(R.performance_takeaway(pooled, 'SOLUBLE')))\ndisplay(Markdown(R.performance_takeaway(pooled, 'NON_MULTIPASS')))"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    display(Markdown(R.performance_takeaway(pooled, 'SOLUBLE')))\n    display(Markdown(R.performance_takeaway(pooled, 'NON_MULTIPASS')))"),
 
     # -------------------------------------------------------------------------------- (ii)
     ("md", "## 2. Dynamic range and error\n\n### 2.1 Score distributions over all possible substitutions\n"
@@ -159,32 +125,12 @@ NARRATIVE = [
              "dyn.round(3)"),
     ("md", "### 2.3 Thresholds and error rates\nA threshold tuned on soluble proteins (Youden's J), or AlphaMissense's published cut-off, "
            "applied unchanged to every class. A higher false-negative rate in multipass proteins means pathogenic variants are missed there."),
-    ("code", "thr = A.threshold_transfer(lab, PRED)\n"
-             "d = thr[thr.threshold == 'Youden on soluble']\n"
-             "fig, axes = plt.subplots(1, 2, figsize=(12, 0.42 * d.predictor.nunique() + 1.6))\n"
-             "for ax, m, t in zip(axes, ['fnr', 'fpr'], ['False-negative rate', 'False-positive rate']):\n"
-             "    w = d.pivot_table(index='predictor', columns='class', values=m).reindex(columns=[c for c in CLASS_ORDER if c in set(d['class'])])\n"
-             "    h = 0.8 / len(w.columns)\n"
-             "    for j, c in enumerate(w.columns):\n"
-             "        ax.barh(np.arange(len(w)) + j * h, w[c], height=h, color=CLASS_COLOR[c], label=CLASS_LABEL[c])\n"
-             "    ax.set_yticks(np.arange(len(w)) + 0.4 - h / 2, [P.label(p) for p in w.index]); ax.invert_yaxis(); ax.set_xlabel(t)\n"
-             "axes[0].legend(fontsize=7); fig.tight_layout(); P.save(fig, '2_3_error_rates')\n"
-             "display(Markdown(R.threshold_takeaway(thr)))\nam = A.alphamissense_zones(lab_all[lab_all.protein_class.notna()])\nam.round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    thr = A.threshold_transfer(lab, PRED)\n    d = thr[thr.threshold == 'Youden on soluble']\n    fig, axes = plt.subplots(1, 2, figsize=(12, 0.42 * d.predictor.nunique() + 1.6))\n    for ax, m, t in zip(axes, ['fnr', 'fpr'], ['False-negative rate', 'False-positive rate']):\n        w = d.pivot_table(index='predictor', columns='class', values=m).reindex(columns=[c for c in CLASS_ORDER if c in set(d['class'])])\n        h = 0.8 / len(w.columns)\n        for j, c in enumerate(w.columns):\n            ax.barh(np.arange(len(w)) + j * h, w[c], height=h, color=CLASS_COLOR[c], label=CLASS_LABEL[c])\n        ax.set_yticks(np.arange(len(w)) + 0.4 - h / 2, [P.label(p) for p in w.index]); ax.invert_yaxis(); ax.set_xlabel(t)\n    axes[0].legend(fontsize=7); fig.tight_layout(); P.save(fig, '2_3_error_rates')\n    display(Markdown(R.threshold_takeaway(thr)))\n    am = A.alphamissense_zones(lab_all[lab_all.protein_class.notna()])\n    display(am.round(3))"),
     ("md", "### 2.4 Calibration\nEach predictor is mapped to a probability of pathogenicity with a logistic fit on soluble variants. "
            "ClinVar's pathogenic fraction differs between classes for reasons of ascertainment, so probabilities are shifted to each "
            "class's own pathogenic fraction before checking them. If the map then transfers, multipass variants lie on the diagonal; "
            "remaining deviations mean the same score carries different information in membrane proteins."),
-    ("code", "calib, curves = A.calibration(lab, PRED)\n"
-             "show = [p for p in ('alphamissense', 'esm1v', 'saprot', 'thermompnn') if p in set(calib.predictor)]\n"
-             "fig, axes = plt.subplots(1, max(1, len(show)), figsize=(3.4 * max(1, len(show)), 3.4), squeeze=False)\n"
-             "for ax, p in zip(axes[0], show):\n"
-             "    for c in ('SOLUBLE', 'MULTIPASS', 'SINGLE_PASS'):\n"
-             "        r = curves[(curves.predictor == p) & (curves['class'] == c)]\n"
-             "        if len(r): ax.plot(r.pred, r.obs, 'o-', color=CLASS_COLOR[c], ms=4, lw=1.6, label=CLASS_LABEL[c])\n"
-             "    ax.plot([0, 1], [0, 1], color=P.AXIS, lw=0.8); ax.set_title(P.label(p), loc='left')\n"
-             "    ax.set_xlabel('Predicted P(pathogenic), prevalence-adjusted'); ax.set_ylabel('Observed fraction pathogenic'); ax.legend(fontsize=7)\n"
-             "fig.tight_layout(); P.save(fig, '2_4_calibration')\n"
-             "display(Markdown(R.calibration_takeaway(calib)))\ncalib.round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    calib, curves = A.calibration(lab, PRED)\n    show = [p for p in ('alphamissense', 'esm1v', 'saprot', 'thermompnn') if p in set(calib.predictor)]\n    fig, axes = plt.subplots(1, max(1, len(show)), figsize=(3.4 * max(1, len(show)), 3.4), squeeze=False)\n    for ax, p in zip(axes[0], show):\n        for c in ('SOLUBLE', 'MULTIPASS', 'SINGLE_PASS'):\n            r = curves[(curves.predictor == p) & (curves['class'] == c)]\n            if len(r): ax.plot(r.pred, r.obs, 'o-', color=CLASS_COLOR[c], ms=4, lw=1.6, label=CLASS_LABEL[c])\n        ax.plot([0, 1], [0, 1], color=P.AXIS, lw=0.8); ax.set_title(P.label(p), loc='left')\n        ax.set_xlabel('Predicted P(pathogenic), prevalence-adjusted'); ax.set_ylabel('Observed fraction pathogenic'); ax.legend(fontsize=7)\n    fig.tight_layout(); P.save(fig, '2_4_calibration')\n    display(Markdown(R.calibration_takeaway(calib)))\n    display(calib.round(3))"),
     ("md", "### 2.5 Do predictors agree?\nRank correlation between predictors over all substitutions, per class, and the per-variant spread of "
            "the predictors' proteome percentiles (higher = more disagreement)."),
     ("code", "corr = A.correlation_by_class(sample, PRED)\n"
@@ -194,8 +140,7 @@ NARRATIVE = [
              "    P.heatmap(corr['SOLUBLE'], ax=axes[1], title='Soluble: Spearman')\n"
              "    P.heatmap(corr[MEMBRANE] - corr['SOLUBLE'], ax=axes[2], title='Difference (multipass - soluble)', vmin=-0.5, vmax=0.5)\n"
              "    fig.tight_layout(); P.save(fig, '2_5_predictor_correlation')"),
-    ("code", "dis_lab = A.disagreement(lab, sample, [p for p in PRED if p != 'solvent_exposure'])\n"
-             "dis_all = A.disagreement(sample, sample, [p for p in PRED if p != 'solvent_exposure'])\n"
+    ("code", "dis_all = A.disagreement(sample, sample, [p for p in PRED if p != 'solvent_exposure'])\n"
              "fig, axes = plt.subplots(1, 2, figsize=(11, 3.5))\n"
              "P.class_violin(dis_all, 'disagreement_sd', [c for c in CLASS_ORDER if c != 'BETA_BARREL_MEMBRANE'], ax=axes[0], ylabel='SD of predictor percentiles', title='All substitutions')\n"
              "d = dis_all[dis_all.protein_class == MEMBRANE]\n"
@@ -204,18 +149,7 @@ NARRATIVE = [
              "dis_all.groupby('protein_class').disagreement_sd.describe().round(2)"),
     ("md", "### 2.6 Variants of uncertain significance\nWhere VUS accumulate, and how predictors would call them using thresholds tuned "
            "on soluble proteins. A large VUS burden with split predictor calls marks where experimental maps would add most."),
-    ("code", "vb = A.vus_burden(prot[prot.taxid == HUMAN])\ndisplay(vb.round(3))\n"
-             "per_vus, agree = A.vus_reclassification(lab_all[lab_all.protein_class.notna()], PRED, VEP)\n"
-             "if len(agree):\n"
-             "    a = agree.set_index('class').reindex([c for c in CLASS_ORDER + ['NON_MULTIPASS'] if c in set(agree['class'])])\n"
-             "    fig, ax = plt.subplots(figsize=(7, 2.8))\n"
-             "    left = np.zeros(len(a))\n"
-             "    for k, col in (('all pathogenic', '#e34948'), ('split', '#eda100'), ('all benign', '#2a78d6')):\n"
-             "        ax.barh(range(len(a)), a[k], left=left, color=col, label=k); left += a[k].fillna(0).to_numpy()\n"
-             "    ax.set_yticks(range(len(a)), [CLASS_LABEL[c] for c in a.index]); ax.invert_yaxis(); ax.set_xlabel('Fraction of VUS')\n"
-             "    ax.set_title('Agreement of ' + ', '.join(P.label(v) for v in VEP) + ' on VUS', loc='left'); ax.legend(fontsize=7, ncol=3, loc='lower right')\n"
-             "    fig.tight_layout(); P.save(fig, '2_6_vus_agreement')\n"
-             "per_vus.pivot_table(index='predictor', columns='class', values='called_pathogenic').round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    vb = A.vus_burden(prot[prot.taxid == TAXID])\n    display(vb.round(3))\n    per_vus, agree = A.vus_reclassification(lab_all[lab_all.protein_class.notna()], PRED, VEP)\n    if len(agree):\n        a = agree.set_index('class').reindex([c for c in CLASS_ORDER + ['NON_MULTIPASS'] if c in set(agree['class'])])\n        fig, ax = plt.subplots(figsize=(7, 2.8))\n        left = np.zeros(len(a))\n        for k, col in (('all pathogenic', '#e34948'), ('split', '#eda100'), ('all benign', '#2a78d6')):\n            ax.barh(range(len(a)), a[k], left=left, color=col, label=k); left += a[k].fillna(0).to_numpy()\n        ax.set_yticks(range(len(a)), [CLASS_LABEL[c] for c in a.index]); ax.invert_yaxis(); ax.set_xlabel('Fraction of VUS')\n        ax.set_title('Agreement of ' + ', '.join(P.label(v) for v in VEP) + ' on VUS', loc='left'); ax.legend(fontsize=7, ncol=3, loc='lower right')\n        fig.tight_layout(); P.save(fig, '2_6_vus_agreement')\n    display(per_vus.pivot_table(index='predictor', columns='class', values='called_pathogenic').round(3))"),
 
     # -------------------------------------------------------------------------------- (iii)
     ("md", "## 3. Structural differences\n\n### 3.1 Model confidence and disorder\nAll proteins (human and yeast). "
@@ -246,17 +180,7 @@ NARRATIVE = [
              "fig.tight_layout(); P.save(fig, '3_3_burial_by_location')\nbl.round(3)"),
     ("md", "### 3.4 Structure and prediction quality\nDoes predictive performance depend on structural context differently in membrane proteins? "
            "Pooled AUC within bins of residue burial depth and model confidence, and per-protein AUC vs protein-level structure."),
-    ("code", "p0 = VEP[0] if VEP else PRED[0]\n"
-             "ctx_depth = A.auc_by_context(lab, p0, 'depth_mean', [-0.1, 1, 3, 6, 100], ['surface (<1 A)', '1-3 A', '3-6 A', 'core (>6 A)'], n_boot=max(50, N_BOOT // 3))\n"
-             "ctx_plddt = A.auc_by_context(lab, p0, 'plddt_model', [0, 70, 90, 101], ['<70', '70-90', '>=90'], n_boot=max(50, N_BOOT // 3))\n"
-             "fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))\n"
-             "for ax, d, t in zip(axes, [ctx_depth, ctx_plddt], ['by burial depth', 'by pLDDT']):\n"
-             "    for j, c in enumerate([MEMBRANE, 'SOLUBLE']):\n"
-             "        s = d[d['class'] == c].reset_index(drop=True); x = np.arange(len(s)) + (j - 0.5) * 0.25\n"
-             "        ax.errorbar(x, s.auc, yerr=[s.auc - s.ci_low, s.ci_high - s.auc], fmt='o', color=CLASS_COLOR[c], label=CLASS_LABEL[c])\n"
-             "    ax.set_xticks(range(len(s)), s['bin']); ax.axhline(0.5, color=P.AXIS); ax.set_ylabel(P.label(p0) + ' AUC'); ax.set_title(t, loc='left'); ax.legend(fontsize=7)\n"
-             "fig.tight_layout(); P.save(fig, '3_4_auc_by_context')\n"
-             "A.auc_vs_structure(D['protein_auc'], sh, p0, A.STRUCT_METRICS, MIN_PER_CLASS).round(3)"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    p0 = VEP[0] if VEP else PRED[0]\n    ctx_depth = A.auc_by_context(lab, p0, 'depth_mean', [-0.1, 1, 3, 6, 100], ['surface (<1 A)', '1-3 A', '3-6 A', 'core (>6 A)'], n_boot=max(50, N_BOOT // 3))\n    ctx_plddt = A.auc_by_context(lab, p0, 'plddt_model', [0, 70, 90, 101], ['<70', '70-90', '>=90'], n_boot=max(50, N_BOOT // 3))\n    fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))\n    for ax, d, t in zip(axes, [ctx_depth, ctx_plddt], ['by burial depth', 'by pLDDT']):\n        for j, c in enumerate([MEMBRANE, 'SOLUBLE']):\n            s = d[d['class'] == c].reset_index(drop=True); x = np.arange(len(s)) + (j - 0.5) * 0.25\n            ax.errorbar(x, s.auc, yerr=[s.auc - s.ci_low, s.ci_high - s.auc], fmt='o', color=CLASS_COLOR[c], label=CLASS_LABEL[c])\n        ax.set_xticks(range(len(s)), s['bin']); ax.axhline(0.5, color=P.AXIS); ax.set_ylabel(P.label(p0) + ' AUC'); ax.set_title(t, loc='left'); ax.legend(fontsize=7)\n    fig.tight_layout(); P.save(fig, '3_4_auc_by_context')\n    display(A.auc_vs_structure(D['protein_auc'], sh, p0, A.STRUCT_METRICS, MIN_PER_CLASS).round(3))"),
 
     # -------------------------------------------------------------------------------- summary
     ("md", "## 4. Summary: multipass vs soluble across all analyses"),
@@ -278,8 +202,13 @@ EXPLORE = [
              "SHAPE_METRICS = [c for c in D['shape_units'].columns if pd.api.types.is_numeric_dtype(D['shape_units'][c])]"),
     ("md", "## Predictor view"),
     ("code", "def predictor_view(p):\n"
-             "    if p not in lab or lab[p].notna().sum() == 0:\n"
+             "    if p not in sample or sample[p].notna().sum() == 0:\n"
              "        print(p, 'has no data'); return\n"
+             "    if not HAS_LABELS:\n"
+             "        print(SKIP.replace('section skipped', 'showing score distributions only'))\n"
+             "        fig, ax = plt.subplots(figsize=(6, 4))\n"
+             "        P.ecdf(sample.assign(v=sample[p] * DIRECTION[p]), 'v', CLASSES, ax=ax, xlabel=P.label(p) + ' (oriented, all substitutions)')\n"
+             "        plt.show(); return\n"
              "    pooled = A.pooled_performance(lab, [p], n_boot=min(N_BOOT, 200))\n"
              "    loc = A.location_performance(lab, [p], n_boot=100)\n"
              "    fig, axes = plt.subplots(2, 3, figsize=(16, 8))\n"
@@ -301,7 +230,7 @@ EXPLORE = [
              "    axes[1, 2].plot([0, 1], [0, 1], color=P.AXIS); axes[1, 2].set_title('Calibration (fitted on soluble)', loc='left'); axes[1, 2].legend(fontsize=7)\n"
              "    fig.suptitle(P.label(p), x=0.01, ha='left'); fig.tight_layout(); plt.show()\n"
              "    display(pooled[['class', 'n_proteins', 'n_pathogenic', 'n_benign', 'auc', 'ci_low', 'ci_high', 'mp_minus_delta', 'mp_minus_q']].round(3))\n\n"
-             "predictor_view(PREDICTOR)"),
+             "predictor_view(PREDICTOR if PREDICTOR in PRED else PRED[0])"),
     ("md", "## Structural metric view"),
     ("code", "def metric_view(metric, unit):\n"
              "    sh = D['shape_units']; d = sh[sh.unit == unit]\n"
@@ -336,7 +265,7 @@ EXPLORE = [
     ("md", "## Interactive (optional)\nWith `ipywidgets` installed (`pip install ipywidgets`), dropdowns re-draw the views."),
     ("code", "try:\n"
              "    import ipywidgets as W\n"
-             "    W.interact(predictor_view, p=W.Dropdown(options=PRED, value=PREDICTOR))\n"
+             "    W.interact(predictor_view, p=W.Dropdown(options=PRED, value=PREDICTOR if PREDICTOR in PRED else PRED[0]))\n"
              "    W.interact(metric_view, metric=W.Dropdown(options=SHAPE_METRICS, value=METRIC), unit=W.Dropdown(options=['CHAIN_FULL', 'CHAIN_TRIMMED', 'DOMAIN', 'TM_CORE'], value=UNIT))\n"
              "    W.interact(protein_view, gene=W.Text(value=GENE))\n"
              "except ImportError:\n"
