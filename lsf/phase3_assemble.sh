@@ -38,10 +38,13 @@ echo "$(wc -l < "$CHUNKS/all_ids.txt") accessions in $N chunks; ${#TODO[@]} to r
 
 DEP=""
 if [ ${#TODO[@]} -gt 0 ]; then
-  IDX=$(IFS=,; echo "${TODO[*]}")
+  # LSF array spec as compressed ranges (1-205, not 1,2,...,205; LSF rejects long job names)
+  IDX=$(printf "%s\n" "${TODO[@]}" | awk 'NR==1{s=p=$1; next} $1==p+1{p=$1; next}
+        {printf "%s%s,", s, (p>s ? "-" p : ""); s=p=$1} END{printf "%s%s", s, (p>s ? "-" p : "")}')
+  if [ ${#IDX} -gt 400 ]; then IDX="${TODO[0]}-${TODO[${#TODO[@]}-1]}"; fi   # finished parts are skipped in-job
   bsub -q "$QUEUE" -J "ve_asm_${TAG}[${IDX}]%${MAXPAR}" -n 1 -M "$MEM" -R "select[mem>$MEM] rusage[mem=$MEM]" \
        -o "lsf/logs/assemble_${TAG}_%I.log" \
-       "source .venv/bin/activate && n=\$(printf 'ids_%03d' \$((LSB_JOBINDEX - 1))) && ve-simple run --ids $CHUNKS/\$n --out $PARTS/\$n --skip esm1v,saprot,foldx,thermompnn --no-thermompnn-download --bootstrap 2000 --no-pdf $SQLITE_FLAG"
+       "source .venv/bin/activate && n=\$(printf 'ids_%03d' \$((LSB_JOBINDEX - 1))) && { [ -f $PARTS/\$n/summary.json ] && echo \"\$n already done\" || ve-simple run --ids $CHUNKS/\$n --out $PARTS/\$n --skip esm1v,saprot,foldx,thermompnn --no-thermompnn-download --bootstrap 2000 --no-pdf $SQLITE_FLAG; }"
   DEP="-w ended(ve_asm_${TAG})"
 fi
 bsub -q "$QUEUE" -J "ve_merge_${TAG}" $DEP -n 1 -M 16000 -R "select[mem>16000] rusage[mem=16000]" \
