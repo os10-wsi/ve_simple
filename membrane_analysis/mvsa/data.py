@@ -15,6 +15,16 @@ def load(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     d = Path(data_dir)
     out = {t: pd.read_parquet(d / f"{t}.parquet") for t in TABLES if (d / f"{t}.parquet").exists()}
     out["meta"] = json.loads((d / "meta.json").read_text()) if (d / "meta.json").exists() else {}
+    # The shape results (and so proteins/shape_units/residues) cover every proteome that was run;
+    # keep only this dataset's organism so structural sections are not mixed across species.
+    taxid = out["meta"].get("taxid")
+    if taxid is not None and "taxid" in out["proteins"]:
+        prot = out["proteins"]
+        out["proteins"] = prot[prot["taxid"] == taxid].reset_index(drop=True)
+        keep = set(out["proteins"]["accession"])
+        for t in TABLES[1:]:
+            if t in out and "accession" in out[t]:
+                out[t] = out[t][out[t]["accession"].isin(keep)].reset_index(drop=True)
     cls = out["proteins"].set_index("accession")["class_annotation"]
     for t in ("labelled_variants", "variant_sample", "protein_scores", "protein_auc", "shape_units", "residues"):
         if t in out and "accession" in out[t]:
