@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -41,6 +42,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--batch-proteins", type=int, default=25,
                    help="proteins processed together per stage (bounds memory; models stay loaded across batches)")
     p.add_argument("--no-pdf", action="store_true", help="skip the ROC PDF (useful for proteome-scale runs)")
+    p.add_argument("--no-sqlite", action="store_true",
+                   help="do not write ve_simple.sqlite (it duplicates the TSVs; ~3x their size at proteome scale)")
     p.add_argument("--cache-only", action="store_true",
                    help="compute and cache scores but write only proteins.tsv and summary.json "
                         "(for cluster chunks; the full tables are built afterwards by the assembly step)")
@@ -81,7 +84,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         thermompnn_download=not args.no_thermompnn_download, thermompnn_compute=not args.no_thermompnn_compute,
         n_boot=args.bootstrap, min_per_class=args.min_per_class, include_likely=not args.strict_labels,
         force=args.force, batch_proteins=max(1, args.batch_proteins), make_pdf=not args.no_pdf,
-        cache_only=args.cache_only, am_bulk=not args.no_alphamissense_bulk,
+        cache_only=args.cache_only, am_bulk=not args.no_alphamissense_bulk, write_sqlite=not args.no_sqlite,
     )
     if args.plot_predictors:
         cfg.plot_predictors = [s.strip() for s in args.plot_predictors.split(",") if s.strip()]
@@ -127,28 +130,49 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     from .evaluate import auc_for_protein, wide_auc_table
     from .plots import DEFAULT_PLOT_PREDICTORS, roc_pdf
 
-    db = ResultsDB(Path(args.out) / "ve_simple.sqlite")
-    proteins = db.read("proteins")
-    if proteins.empty:
-        print("No results found in", args.out, file=sys.stderr)
-        return 1
+    out = Path(args.out)
+    proteins = pd.read_csv(out / "proteins.tsv", sep="\t")
     human = proteins[proteins["is_human"].astype(bool)]
-    # only labelled variants are needed for AUCs and plots; read them once instead of the whole table
-    labelled = pd.read_sql("SELECT * FROM variants WHERE clinvar_label IN ('pathogenic','benign')", db.conn)
+    db_path = out / "ve_simple.sqlite"
+    db = ResultsDB(db_path) if db_path.exists() else None
+    # only labelled variants are needed for AUCs and plots
+    if db is not None:
+        labelled = pd.read_sql("SELECT * FROM variants WHERE clinvar_label IN ('pathogenic','benign')", db.conn)
+    else:
+        parts = [c[c["clinvar_label"].isin(["pathogenic", "benign"])]
+                 for c in pd.read_csv(out / "variant_scores.tsv", sep="\t", chunksize=2_000_000,
+                                      dtype={"clinvar_label": "object", "clinvar_class": "object",
+                                             "clinvar_review_status": "object", "clinvar_ids": "object",
+                                             "clinvar_significances": "object"})]
+        labelled = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     frames = []
     for acc in human["accession"]:
-        sub = labelled[labelled["accession"] == acc]
+        sub = labelled[labelled["accession"] == acc] if len(labelled) else labelled
+        if not len(sub):
+            continue
         auc = auc_for_protein(sub, acc, n_boot=args.bootstrap, min_per_class=args.min_per_class)
         frames.append(auc)
-        db.write_auc(auc)
+        if db is not None:
+            db.write_auc(auc)
     auc_long = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    auc_long.to_csv(Path(args.out) / "auc_long.tsv", sep="\t", index=False)
-    wide_auc_table(auc_long, human).to_csv(Path(args.out) / "auc_per_protein.tsv", sep="\t", index=False)
+    auc_long.to_csv(out / "auc_long.tsv", sep="\t", index=False)
+    wide_auc_table(auc_long, human).to_csv(out / "auc_per_protein.tsv", sep="\t", index=False)
     preds = [s.strip() for s in args.plot_predictors.split(",")] if args.plot_predictors else DEFAULT_PLOT_PREDICTORS
     if not args.no_pdf and len(labelled):
-        roc_pdf(labelled, human, Path(args.out) / "roc_curves.pdf", preds)
-    db.close()
+        roc_pdf(labelled, human, out / "roc_curves.pdf", preds)
+    if db is not None:
+        db.close()
     print("Updated AUC tables and ROC PDF in", args.out)
+    return 0
+
+
+def cmd_merge_parts(args: argparse.Namespace) -> int:
+    from .merge import merge_parts
+    from .plots import DEFAULT_PLOT_PREDICTORS
+    preds = [s.strip() for s in args.plot_predictors.split(",")] if args.plot_predictors else DEFAULT_PLOT_PREDICTORS
+    summary = merge_parts(args.parts, args.out, make_pdf=not args.no_pdf, plot_predictors=preds,
+                          allow_partial=args.allow_partial)
+    print(json.dumps({k: v for k, v in summary.items() if k != "outputs"}, indent=2))
     return 0
 
 
@@ -241,6 +265,14 @@ def main(argv=None) -> int:
     p_e.add_argument("--no-pdf", action="store_true")
     p_e.add_argument("-v", "--verbose", action="store_true")
     p_e.set_defaults(func=cmd_evaluate)
+    p_m = sub.add_parser("merge-parts", help="combine the per-chunk outputs of a parallel assembly")
+    p_m.add_argument("--parts", type=Path, required=True, help="directory holding one results directory per chunk")
+    p_m.add_argument("--out", type=Path, required=True)
+    p_m.add_argument("--plot-predictors", default=None)
+    p_m.add_argument("--no-pdf", action="store_true")
+    p_m.add_argument("--allow-partial", action="store_true", help="merge even if some parts did not finish")
+    p_m.add_argument("-v", "--verbose", action="store_true")
+    p_m.set_defaults(func=cmd_merge_parts)
     p_c = sub.add_parser("check-cache", help="find (and with --delete remove) truncated or unreadable cache files")
     p_c.add_argument("--cache", type=Path, default=Path("cache"))
     p_c.add_argument("--ids", type=Path, default=None, help="restrict to these accessions (default: whole cache)")

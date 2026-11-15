@@ -57,6 +57,7 @@ class Config:
     plot_predictors: list[str] = field(default_factory=lambda: list(DEFAULT_PLOT_PREDICTORS))
     make_pdf: bool = True
     cache_only: bool = False                           # compute + cache scores; write only proteins.tsv/summary.json
+    write_sqlite: bool = True                          # also write ve_simple.sqlite (same content as the TSVs)
     am_bulk: bool = True                               # fill AlphaMissense gaps from the bulk release
     batch_proteins: int = 25                           # proteins processed together per stage
     force: bool = False
@@ -505,7 +506,7 @@ def run_pipeline(cfg: Config) -> dict:
     """Process proteins in batches; stream per-variant results to disk so memory stays bounded."""
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    db = None if cfg.cache_only else ResultsDB(out / "ve_simple.sqlite", fresh=True)
+    db = None if (cfg.cache_only or not cfg.write_sqlite) else ResultsDB(out / "ve_simple.sqlite", fresh=True)
     zen = prepare_thermompnn_archive(cfg)
     prepare_alphamissense(cfg)
     pool = ScorerPool(cfg)
@@ -541,17 +542,20 @@ def run_pipeline(cfg: Config) -> dict:
             prot_rows.append(prow)
             if cfg.cache_only:
                 continue
-            db.write_protein(prow)
-            db.write_variants(st.variants)
+            if db is not None:
+                db.write_protein(prow)
+                db.write_variants(st.variants)
             st.variants.to_csv(tsv_path, sep="\t", index=False, mode="a", header=not tsv_path.exists())
             n_variants += len(st.variants)
             if len(st.clinvar_df):
-                db.write_clinvar(st.clinvar_df)
+                if db is not None:
+                    db.write_clinvar(st.clinvar_df)
                 st.clinvar_df.to_csv(cv_path, sep="\t", index=False, mode="a", header=not cv_path.exists())
             if st.entry.is_human:
                 auc = auc_for_protein(st.variants, st.acc, n_boot=cfg.n_boot, min_per_class=cfg.min_per_class)
                 auc_frames.append(auc)
-                db.write_auc(auc)
+                if db is not None:
+                    db.write_auc(auc)
                 lab = st.variants[st.variants["clinvar_label"].isin(["pathogenic", "benign"])]
                 if len(lab):
                     labelled_frames.append(lab)
@@ -577,12 +581,17 @@ def run_pipeline(cfg: Config) -> dict:
     auc_long.to_csv(out / "auc_long.tsv", sep="\t", index=False)
     auc_wide.to_csv(out / "auc_per_protein.tsv", sep="\t", index=False)
     pdf = None
-    if cfg.make_pdf and labelled_frames:
-        labelled = pd.concat(labelled_frames, ignore_index=True)
+    labelled = pd.concat(labelled_frames, ignore_index=True) if labelled_frames else pd.DataFrame()
+    if len(labelled):
+        # small (ClinVar-labelled rows only); lets a parallel assembly build the ROC PDF without
+        # re-reading the full variant table
+        labelled.to_csv(out / "labelled_variant_scores.tsv", sep="\t", index=False)
+    if cfg.make_pdf and len(labelled):
         pdf = roc_pdf(labelled, human, out / "roc_curves.pdf", predictors=cfg.plot_predictors)
-    log.info("indexing the results database")
-    db.finish()
-    db.close()
+    if db is not None:
+        log.info("indexing the results database")
+        db.finish()
+        db.close()
     summary = {
         "n_requested": len(cfg.ids), "n_proteins": len(prot_rows), "n_human": int(len(human)),
         "n_variants": int(n_variants), "n_with_auc": int(auc_long["accession"].nunique()) if len(auc_long) else 0,
@@ -590,7 +599,7 @@ def run_pipeline(cfg: Config) -> dict:
             "proteins": str(out / "proteins.tsv"), "variant_scores": str(tsv_path),
             "clinvar_variants": str(cv_path), "auc_long": str(out / "auc_long.tsv"),
             "auc_per_protein": str(out / "auc_per_protein.tsv"), "roc_pdf": str(pdf) if pdf else None,
-            "sqlite": str(out / "ve_simple.sqlite"),
+            "sqlite": str(out / "ve_simple.sqlite") if db is not None else None,
         },
     }
     write_json(summary, out / "summary.json")

@@ -19,9 +19,12 @@ directory (or pass the same `--cache`, `--data-dir` and `--external-dir`) so tha
    proteins (default 10) with several cores, long queue, writing only to the cache. FoldX is the slow part: BuildModel takes a few seconds per mutant, and a
    400-residue protein has 7,600 mutants.
 
-4. **Phase 3, assembly** (`lsf/phase3_assemble.sh`): one job that reads the cache, fills
-   AlphaMissense for human proteins AlphaFold DB does not serve (one pass over the 1.2 GB release,
-   ~10-20 minutes), and builds the combined tables, database, AUC statistics and ROC PDF.
+4. **Phase 3, assembly** (`lsf/phase3_assemble.sh`): a CPU job array, one element per chunk of
+   100 proteins, each reading the cache and writing its tables and per-protein AUCs to
+   `<out>/parts/ids_NNN/`; then one merge job (`ve-simple merge-parts`, started when the array has
+   ended) concatenates the parts into `<out>/` and draws the ROC PDF. Running the same command again
+   resubmits only the chunks without a finished part, plus the merge. No SQLite database is written
+   unless `SQLITE=1` (it is ~3x the size of the TSVs and nothing downstream reads it).
 
 Chunk files, job names, logs and `results_phase*` directories are namespaced by the ID file's basename
 (e.g. `uniprot_reviewed_9606`), so different proteomes can be submitted independently. Chunks that
@@ -50,9 +53,8 @@ models), so the human proteome is ~270 GPU-hours spread over the array. FoldX sa
 a few seconds per mutant times 19 x length, i.e. several CPU-hours for an average protein and
 weeks for the largest ones, so ~100,000 core-hours per proteome. `FOLDX_SCOPE=clinvar` restricts
 FoldX to positions with ClinVar variants (all the AUC benchmark needs) and cuts this ~50-fold;
-it is only meaningful for human proteins. Assembly streams proteins in batches, so it needs little
-memory, but the human `variant_scores.tsv` will be ~190 million rows (tens of GB); the SQLite
-database next to it has the same content indexed by accession.
+it is only meaningful for human proteins. The human `variant_scores.tsv` will be ~190 million rows
+(tens of GB); `labelled_variant_scores.tsv` holds just the ClinVar pathogenic/benign rows.
 
 ## File-count budget
 
