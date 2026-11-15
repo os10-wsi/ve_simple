@@ -1,6 +1,8 @@
 """Figure helpers with one visual language: classes always in the same colour, MULTIPASS highlighted."""
 from __future__ import annotations
 
+import textwrap
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -72,8 +74,8 @@ def class_violin(df: pd.DataFrame, value: str, classes: list, ax=None, ylabel: s
         for k in ("cmedians", "cmins", "cmaxes", "cbars"):
             parts[k].set_color(INK2)
             parts[k].set_linewidth(0.8)
-    ax.set_xticks(range(len(classes)), [f"{CLASS_LABEL.get(c, c)}\n(n={len(d)})" for c, d in zip(classes, data)],
-                  fontsize=7)
+    ax.set_xticks(range(len(classes)), [f"{textwrap.fill(CLASS_LABEL.get(c, c), 11)}\n(n={len(d):,})"
+                                        for c, d in zip(classes, data)], fontsize=7)
     if ref is not None:
         ax.axhline(ref, color=AXIS, lw=1, zorder=0)
     ax.set_ylabel(ylabel or label(value))

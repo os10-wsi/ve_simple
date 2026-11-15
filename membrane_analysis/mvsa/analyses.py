@@ -167,8 +167,17 @@ def dynamic_range(pscores: pd.DataFrame, predictors: list[str]) -> pd.DataFrame:
                 row[f"median_{k}"] = sub[k].median()
                 if c != MEMBRANE:
                     row[f"cliffs_{k}"] = S.cliffs_delta(mp[k], sub[k])
+            if c != MEMBRANE:
+                row["cliffs_dynamic_range_low"], row["cliffs_dynamic_range_high"] = \
+                    S.cliffs_delta_ci(mp["dynamic_range"], sub["dynamic_range"])
+                row["p_dynamic_range"] = S.mwu_p(mp["dynamic_range"], sub["dynamic_range"])
             rows.append(row)
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if "p_dynamic_range" in out:
+        out["q_dynamic_range"] = np.nan
+        for c, idx in out[out["class"] != MEMBRANE].groupby("class").groups.items():
+            out.loc[idx, "q_dynamic_range"] = S.bh(out.loc[idx, "p_dynamic_range"])
+    return out
 
 
 def tm_vs_rest_scores(pscores: pd.DataFrame, predictors: list[str]) -> pd.DataFrame:

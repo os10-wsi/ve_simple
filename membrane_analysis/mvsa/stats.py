@@ -164,6 +164,18 @@ def cliffs_delta(x, y) -> float:
     return float(2 * u / (len(x) * len(y)) - 1)
 
 
+def cliffs_delta_ci(x, y, n_boot: int = 300, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
+    """Percentile bootstrap CI for Cliff's delta, resampling each group (e.g. proteins) independently."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    x, y = x[np.isfinite(x)], y[np.isfinite(y)]
+    if len(x) < 3 or len(y) < 3:
+        return np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    d = [cliffs_delta(rng.choice(x, len(x)), rng.choice(y, len(y))) for _ in range(n_boot)]
+    a = (1 - level) / 2
+    return float(np.quantile(d, a)), float(np.quantile(d, 1 - a))
+
+
 def mwu_p(x, y) -> float:
     x, y = np.asarray(x, float), np.asarray(y, float)
     x, y = x[np.isfinite(x)], y[np.isfinite(y)]

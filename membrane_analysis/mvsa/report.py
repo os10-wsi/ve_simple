@@ -116,7 +116,9 @@ def summary_table(pooled, matched, thr, calib, dyn, contrasts) -> pd.DataFrame:
                              "estimate": r[MEMBRANE] - r["SOLUBLE"], "low": np.nan, "high": np.nan, "q": np.nan})
     for r in dyn[dyn["class"] == "SOLUBLE"].itertuples():
         rows.append({"section": "(ii) dynamic range", "measure": "per-protein dynamic range (Cliff's delta MP vs SOL)",
-                     "item": r.predictor, "estimate": r.cliffs_dynamic_range, "low": np.nan, "high": np.nan, "q": np.nan})
+                     "item": r.predictor, "estimate": r.cliffs_dynamic_range,
+                     "low": getattr(r, "cliffs_dynamic_range_low", np.nan),
+                     "high": getattr(r, "cliffs_dynamic_range_high", np.nan), "q": getattr(r, "q_dynamic_range", np.nan)})
     for r in contrasts[contrasts["class"] == "SOLUBLE"].itertuples():
         rows.append({"section": "(iii) structure", "measure": f"{r.unit} size-matched Cliff's delta (MP vs SOL)",
                      "item": r.metric, "estimate": r.cliffs_delta_size_matched, "low": np.nan, "high": np.nan, "q": r.q})
