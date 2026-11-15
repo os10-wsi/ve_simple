@@ -152,6 +152,19 @@ def _process(df, ctx, cls, rng, sample_rate, labelled, sample, summaries):
         summaries.extend(summarise_protein(g))
 
 
+def check_inputs(ve: Path, shape: Path) -> None:
+    """Stop early, with a clear message, if an upstream step has not finished."""
+    missing_ve = [f for f in ("variant_scores.tsv", "proteins.tsv", "auc_long.tsv") if not (ve / f).exists()]
+    if missing_ve:
+        raise SystemExit(f"{ve} is missing {', '.join(missing_ve)}: the ve_simple assembly (lsf/phase3_assemble.sh) "
+                         "has not finished for this proteome.")
+    missing_shape = [f for f in ("classes.parquet", "annotations.parquet", "metrics.parquet", "residues.parquet",
+                                 "status.parquet") if not (shape / f).exists()]
+    if missing_shape:
+        raise SystemExit(f"{shape} is missing {', '.join(missing_shape)}: run `protshape collect` and "
+                         "`protshape classify` in shape_analysis first.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ve", type=Path, required=True, help="ve_simple assembly directory (e.g. ../results_human)")
@@ -159,8 +172,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, default=Path("data"))
     ap.add_argument("--sample-rate", type=float, default=0.01, help="fraction of all substitutions kept for plots")
     ap.add_argument("--chunksize", type=int, default=2_000_000)
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="proceed even if the shape results cover less than half of the ve_simple proteins")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    check_inputs(args.ve, args.shape)
     args.out.mkdir(parents=True, exist_ok=True)
 
     classes = pd.read_parquet(args.shape / "classes.parquet")
@@ -169,6 +185,13 @@ def main(argv=None) -> int:
     ve_prot = pd.read_csv(args.ve / "proteins.tsv", sep="\t")
     log.info("building residue context")
     residues = residue_context(args.shape, classes, ann)
+    covered = ve_prot["accession"].isin(set(residues["accession"])).mean()
+    log.info("shape results cover %.0f%% of the %d proteins in %s", 100 * covered, len(ve_prot), args.ve)
+    if covered < 0.5 and not args.allow_partial:
+        raise SystemExit(
+            f"The shape results in {args.shape} cover only {100 * covered:.0f}% of the proteins in {args.ve}. "
+            "The full shape run has probably not been collected yet (protshape collect). Finish it first, or pass "
+            "--allow-partial to continue with structural context for the covered proteins only.")
     # residue numbering of the AlphaFold model only matches the variants when the sequences agree
     mismatch = set(ve_prot.loc[ve_prot.get("structure_sequence_mismatch", False).astype(bool), "accession"])
     residues.loc[residues.accession.isin(mismatch), ["rsa", "depth_mean", "location"]] = [np.nan, np.nan, "Unknown"]
