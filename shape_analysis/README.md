@@ -28,7 +28,7 @@ pip install -e shape_analysis
 | `protshape analyze` | stage-5 analyses and figures | `analysis/`, `findings.md` |
 
 `scripts/stage0.sh` runs Stage 0 end to end on the cluster; `lsf/compute_array.sh` runs the full
-compute as an LSF array; `notebooks/analysis.ipynb` is the analysis notebook (regenerate with
+compute as an LSF array; `lsf/collect_analyze.sh` (from any directory) then runs collect, classify and analyze as one job; `notebooks/analysis.ipynb` is the analysis notebook (regenerate with
 `python scripts/make_notebook.py`; set `PROTSHAPE_WORK` to point it at a results directory).
 
 ## Data and versions
