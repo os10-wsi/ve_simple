@@ -75,3 +75,20 @@ Regenerate the notebooks after editing `scripts/make_notebooks.py`.
 ```bash
 python -m pytest membrane_analysis/tests
 ```
+
+## Talk figures and ThermoMPNN's worst proteins
+
+`notebooks/talk_figures.ipynb` makes slide-ready figures (large type, no grid, one accent colour for multipass,
+a data-driven headline on every figure) and the ThermoMPNN analysis: the bottom 100 multipass proteins by
+ThermoMPNN's per-protein ClinVar AUC, and the bottom 100 by its agreement with ESM-1v / SaProt / AlphaMissense
+(median per-protein Spearman ρ over all substitutions), what distinguishes them, their families, and the overlap.
+
+    bash lsf/protcorr.sh human                 # per-protein correlations (~20-30 min; needs data_human/)
+    bash lsf/protcorr.sh yeast
+    AFTER=1 bash lsf/run_talk.sh human         # starts when protcorr finishes
+    AFTER=1 bash lsf/run_talk.sh yeast
+
+Outputs: `figures_talk_<name>/*.png|pdf`, tables in `figures_talk_<name>/tables/` (including
+`thermo_bottom100_clinical.tsv`, `thermo_bottom100_agreement.tsv`, `thermo_bottom_both_lists.tsv`), and
+`executed/talk_figures_<name>.executed.html`. The structure figure shows human and yeast together when both
+`data_human/` and `data_yeast/` exist. `N_BOTTOM=50 bash lsf/run_talk.sh human` changes the list size.
