@@ -11,4 +11,4 @@
 module load ISG/IRODS/1.0
 module load HGI/softpack/users/tw10/Bisulfite/1
 
-samtools collate -O -u -@ 12 irods://seq/illumina/runs/53/53345/plex26/53345#26.cram pfx-OTAR309717025660 | samtools fastq -F 0x900 -@ 12 -0 OTAR309717025660.fastq.gz -N -1 OTAR309717025660_1.fastq.gz -2 OTAR309717025660_2.fastq.gz -
+samtools collate -f -O -u -@ 12 irods://seq/illumina/runs/53/53345/plex26/53345#26.cram | samtools fastq -@ 2 -c 1 -0 OTAR309717025660.fastq.gz -N -1 OTAR309717025660_1.fastq.gz -2 OTAR309717025660_2.fastq.gz -
