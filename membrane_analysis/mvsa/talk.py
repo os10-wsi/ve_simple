@@ -257,10 +257,12 @@ def structure_dots(contrasts: dict[str, pd.DataFrame], metrics: dict = STRUCT_SH
     base = first[first["class"] == comparator].set_index("metric").reindex(ms).cliffs_delta_size_matched
     ms = base.sort_values().index.tolist()
     fig, ax = plt.subplots(figsize=TALL)
-    styles = [(HUMAN_C, "o"), (YEAST_C, "D")]
+    styles = [(HUMAN_C, "o"), (YEAST_C, "D"), ("#5b7f95", "s"), ("#8c6d9e", "^"), ("#6f8f5a", "v"), ("#a35f5f", "P"),
+              ("#4f6b6b", "X"), ("#9e8a5b", "<"), ("#7a7a7a", ">"), ("#3f5f8f", "h")]
     for (org, df), (col, mk) in zip(contrasts.items(), styles):
         v = df[df["class"] == comparator].set_index("metric").reindex(ms).cliffs_delta_size_matched
-        ax.scatter(v, range(len(ms)), s=110, color=col, marker=mk, zorder=3, label=org)
+        ax.scatter(v, range(len(ms)), s=110 if len(contrasts) <= 3 else 70, color=col, marker=mk, zorder=3, label=org,
+                   alpha=0.9)
     for i, m in enumerate(ms):
         vals = [df[df["class"] == comparator].set_index("metric").cliffs_delta_size_matched.get(m, np.nan) for df in contrasts.values()]
         ax.plot([0, np.nanmean(vals)], [i, i], color=LIGHT, lw=5, zorder=1)
@@ -268,7 +270,7 @@ def structure_dots(contrasts: dict[str, pd.DataFrame], metrics: dict = STRUCT_SH
     ax.set_yticks(range(len(ms)), [metrics[m] for m in ms])
     ax.set_xlim(-1, 1)
     ax.set_xlabel("Size-matched Cliff's δ, multipass vs soluble   (−1 always lower · +1 always higher)")
-    ax.legend(loc="lower right")
+    ax.legend(loc="lower right", ncol=1 if len(contrasts) <= 4 else 2, fontsize=12)
     return fig
 
 
@@ -354,4 +356,60 @@ def agreement_hist(t_all: pd.DataFrame):
     ax.set_xlabel("ThermoMPNN agreement with sequence predictors (median per-protein Spearman ρ)")
     ax.set_ylabel("Density")
     ax.legend(loc="upper left")
+    return fig
+
+
+# ------------------------------------------------------------------------------------------- families
+def matrix(values: pd.DataFrame, colour: pd.DataFrame | None = None, fmt: str = "{:.2f}", cmap=None,
+           vmin: float = -2, vmax: float = 2, cbar: str = ""):
+    """Annotated heatmap: `values` are printed, `colour` (default: values z-scored per column) sets the shade."""
+    colour = colour if colour is not None else (values - values.mean()) / values.std(ddof=0).replace(0, np.nan)
+    cmap = cmap or DIVERGING
+    fig, ax = plt.subplots(figsize=(1.05 * values.shape[1] + 4.2, 0.42 * values.shape[0] + 2.4))
+    im = ax.imshow(colour.to_numpy(float), cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+    for i in range(values.shape[0]):
+        for j in range(values.shape[1]):
+            v, c = values.iat[i, j], colour.iat[i, j]
+            if pd.notna(v):
+                ax.text(j, i, fmt.format(v), ha="center", va="center", fontsize=10,
+                        color="white" if pd.notna(c) and abs(c) > 0.6 * max(abs(vmin), abs(vmax)) else INK)
+    ax.set_xticks(range(values.shape[1]), [str(c) for c in values.columns], rotation=40, ha="right", fontsize=11)
+    ax.set_yticks(range(values.shape[0]), [str(r) for r in values.index], fontsize=11)
+    ax.tick_params(length=0)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    cb = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+    cb.set_label(cbar, fontsize=11)
+    cb.outline.set_visible(False)
+    return fig
+
+
+def family_boxes(t: pd.DataFrame, col: str, xlabel: str, order: list | None = None, ref: float | None = 0.0):
+    order = order or t.groupby("family")[col].median().sort_values().index.tolist()
+    fig, ax = plt.subplots(figsize=(11, 0.38 * len(order) + 1.8))
+    data = [t.loc[t.family == f, col].dropna().to_numpy() for f in order]
+    bp = ax.boxplot(data, vert=False, widths=0.6, patch_artist=True, showfliers=False,
+                    medianprops={"color": MP, "lw": 2}, boxprops={"facecolor": "#eeeeee", "edgecolor": SUB},
+                    whiskerprops={"color": SUB}, capprops={"color": SUB})
+    for i, d in enumerate(data, 1):
+        if len(d):
+            ax.scatter(d, np.random.default_rng(i).normal(i, 0.07, len(d)), s=5, color=SUB, alpha=0.25, zorder=0)
+    ax.set_yticks(range(1, len(order) + 1), [f"{f}  (n={len(d)})" for f, d in zip(order, data)], fontsize=11)
+    if ref is not None:
+        ax.axvline(ref, color=LIGHT, lw=1, zorder=0)
+    ax.set_xlabel(xlabel)
+    return fig
+
+
+def drivers_dots(dr: pd.DataFrame, labels: dict):
+    d = dr.iloc[::-1]
+    fig, ax = plt.subplots(figsize=(11, 0.5 * len(d) + 1.8))
+    for i, r in enumerate(d.itertuples()):
+        ax.plot([r.rho_pooled, r.rho_within_median], [i, i], color=LIGHT, lw=5, zorder=1)
+        ax.scatter(r.rho_pooled, i, s=80, color="white", edgecolor=SOL, lw=1.8, zorder=3)
+        ax.scatter(r.rho_within_median, i, s=90, color=MP, zorder=4)
+    ax.axvline(0, color=INK, lw=1)
+    ax.set_yticks(range(len(d)), [labels.get(f, flabel(f)) for f in d.feature])
+    ax.set_xlabel("Spearman ρ with the protein feature")
+    _legend_dots(ax, [("Within families (median)", MP, "o", MP), ("All proteins pooled", SOL, "o", "white")], loc="lower right")
     return fig

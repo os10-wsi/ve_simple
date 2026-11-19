@@ -1,0 +1,21 @@
+pfam	short	name	clan	clan_name	proteins
+PF07690	MFS_1	Major Facilitator Superfamily	CL0015	MFS	1084046
+PF00528	BPD_transp_1	Binding-protein-dependent transport system inner membrane component	CL0404	BPD_transp_1	683492
+PF00001	7tm_1	7 transmembrane receptor (rhodopsin family)	CL0192	GPCR_A	379138
+PF00664	ABC_membrane	ABC transporter transmembrane region	CL0241	ABC_membrane	300115
+PF00892	EamA	EamA-like transporter family	CL0184	DMT	224511
+PF00520	Ion_trans	Ion transport protein	CL0030	Ion_channel	214415
+PF02653	BPD_transp_2	Branched-chain amino acid transport system / permease component	CL0142	Membrane_trans	213261
+PF00122	E1-E2_ATPase	P-type ATPase actuator domain	None	None	206081
+PF00115	COX1	Cytochrome C and Quinol oxidase polypeptide I	CL0714	COX1-like	151884
+PF13520	AA_permease_2	Amino acid permease	CL0062	APC	147127
+PF01061	ABC2_membrane	ABC-2 type transporter	CL0181	ABC-2	144415
+PF00361	Proton_antipo_M	NADH:quinone oxidoreductase/Mrp antiporter, TM	CL0425	ComplexI-N	132893
+PF00999	Na_H_Exchanger	Sodium/hydrogen exchanger, transmembrane	CL0064	CPA_AT	124682
+PF01554	MatE	MatE	CL0222	MviN_MATE	102801
+PF00873	ACR_tran	AcrB/AcrD/AcrF family	CL0322	RND_permease	100425
+PF01569	PAP2	PAP2 superfamily	CL0525	pap2	91946
+PF09335	VTT_dom	VTT domain	None	None	77406
+PF01925	TauE	Sulfite exporter TauE/SafE	CL0292	LysE	75720
+PF00230	MIP	Major intrinsic protein	CL0716	Aquaporin-like	72161
+PF01040	UbiA	UbiA prenyltransferase family	CL0613	Terp_synthase	72044

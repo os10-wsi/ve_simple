@@ -1,0 +1,72 @@
+# InterPro counts (Nov 2026) for candidate membrane Pfam families; families.tsv takes the largest per clan, excluding soluble domains (ABC_tran, Hydrolase, DAO, TrkA_N)
+pfam	short	name	proteins	afdb_models	clan	clan_name
+PF00005	ABC_tran	ABC transporter	1719283	1022455	CL0023	P-loop_NTPase
+PF07690	MFS_1	Major Facilitator Superfamily	1084046	727217	CL0015	MFS
+PF00528	BPD_transp_1	Binding-protein-dependent transport system inner membrane component	683492	407287	CL0404	BPD_transp_1
+PF00001	7tm_1	7 transmembrane receptor (rhodopsin family)	379138	326934	CL0192	GPCR_A
+PF00664	ABC_membrane	ABC transporter transmembrane region	300115	157154	CL0241	ABC_membrane
+PF00083	Sugar_tr	Sugar (and other) transporter	290270	221815	CL0015	MFS
+PF00702	Hydrolase	haloacid dehalogenase-like hydrolase	267224	173441	CL0137	HAD
+PF00892	EamA	EamA-like transporter family	224511	142917	CL0184	DMT
+PF00520	Ion_trans	Ion transport protein	214415	127119	CL0030	Ion_channel
+PF02653	BPD_transp_2	Branched-chain amino acid transport system / permease component	213261	131541	CL0142	Membrane_trans
+PF00122	E1-E2_ATPase	P-type ATPase actuator domain	206081	139820	None	None
+PF01266	DAO	FAD dependent oxidoreductase	188991	124451	CL0063	NADP_Rossmann
+PF00115	COX1	Cytochrome C and Quinol oxidase polypeptide I	151884	126782	CL0714	COX1-like
+PF13520	AA_permease_2	Amino acid permease	147127	104040	CL0062	APC
+PF13853	7tm_4	Olfactory receptor	146646	117728	CL0192	GPCR_A
+PF02687	FtsX	FtsX-like permease C-terminal	144620	89300	CL0404	BPD_transp_1
+PF01061	ABC2_membrane	ABC-2 type transporter	144415	83157	CL0181	ABC-2
+PF00361	Proton_antipo_M	NADH:quinone oxidoreductase/Mrp antiporter, TM	132893	98491	CL0425	ComplexI-N
+PF00999	Na_H_Exchanger	Sodium/hydrogen exchanger, transmembrane	124682	86103	CL0064	CPA_AT
+PF01554	MatE	MatE	102801	70675	CL0222	MviN_MATE
+PF00873	ACR_tran	AcrB/AcrD/AcrF family	100425	60547	CL0322	RND_permease
+PF01569	PAP2	PAP2 superfamily	91946	64139	CL0525	pap2
+PF00324	AA_permease	Amino acid permease	85227	61086	CL0062	APC
+PF00002	7tm_2	7 transmembrane receptor (Secretin family)	77540	50405	CL0192	GPCR_A
+PF09335	VTT_dom	VTT domain	77406	50313	None	None
+PF01925	TauE	Sulfite exporter TauE/SafE	75720	48099	CL0292	LysE
+PF12698	ABC2_membrane_3	ABC-2 family transporter protein	73914	37248	CL0181	ABC-2
+PF00230	MIP	Major intrinsic protein	72161	54280	CL0716	Aquaporin-like
+PF01040	UbiA	UbiA prenyltransferase family	72044	48737	CL0613	Terp_synthase
+PF00924	MS_channel_2nd	Mechanosensitive ion channel, beta-domain	71299	46043	CL0986	Sm-like
+PF07885	Ion_trans_2	Ion channel	70479	53109	CL0030	Ion_channel
+PF00916	Sulfate_transp	Sulfate permease family	68714	48890	CL0062	APC
+PF01032	FecCD	FecCD transport family	68332	40497	CL0142	Membrane_trans
+PF01529	DHHC	DHHC palmitoyltransferase	63006	51662	None	None
+PF01699	Na_Ca_ex	Sodium/calcium exchanger protein	62947	48014	None	None
+PF00335	Tetraspanin	Tetraspanin family	62591	53204	CL0347	TSPAN_4TM-like
+PF00860	Xan_ur_permease	Permease family	61736	41150	CL0062	APC
+PF00209	SNF	Sodium:neurotransmitter symporter family	59343	48770	CL0062	APC
+PF02254	TrkA_N	TrkA-N domain	58624	38079	CL0063	NADP_Rossmann
+PF01595	CNNM	Cyclin M transmembrane N-terminal domain	58216	37927	None	None
+PF00375	SDF	Sodium:dicarboxylate symporter family	52152	35866	None	None
+PF00003	7tm_3	7 transmembrane sweet-taste receptor of 3 GCPR	49697	40703	CL0192	GPCR_A
+PF00654	Voltage_CLC	Voltage gated chloride channel	49243	36623	None	None
+PF01544	CorA	CorA-like Mg2+ transporter protein	45736	30200	CL0788	CorA-like
+PF03176	MMPL	MMPL family	44615	25712	CL0322	RND_permease
+PF03547	Mem_trans	Membrane transport protein	41618	29052	CL0064	CPA_AT
+PF02397	Bac_transf	Bacterial sugar transferase	37710	23700	None	None
+PF03600	CitMHS	Citrate transporter	37429	24527	CL0182	IT
+PF00822	PMP22_Claudin	PMP-22/EMP/MP20/Claudin family	35874	31410	CL0375	Transporter
+PF00510	COX3	Cytochrome c oxidase subunit III	34308	24193	None	None
+PF03169	OPT	OPT oligopeptide transporter protein	33404	25067	CL0962	YS1_YSL
+PF00146	NADHdh	NADH dehydrogenase	33320	25839	CL0425	ComplexI-N
+PF02133	Transp_cyt_pur	Permease for cytosine/purines, uracil, thiamine, allantoin	33318	21679	CL0062	APC
+PF01758	SBF	Sodium Bile acid symporter family	32965	22543	CL0064	CPA_AT
+PF02355	SecD_SecF_C	Protein export membrane protein SecD/SecF, C-terminal	32390	20528	CL0322	RND_permease
+PF00119	ATP-synt_A	ATP synthase A chain	30546	22994	None	None
+PF01148	CTP_transf_1	Cytidylyltransferase family	29103	19978	CL0234	CTPT
+PF01384	PHO4	Phosphate transporter family	28989	20110	None	None
+PF00950	ABC-3	ABC 3 transport family	27879	17671	CL0142	Membrane_trans
+PF13231	PMT_2	Dolichyl-phosphate-mannose-protein mannosyltransferase	27770	17352	CL0111	GT-C
+PF04138	GtrA_DPMS_TM	GtrA/DPMS, transmembrane domain	25685	15481	None	None
+PF00939	Na_sulph_symp	Sodium:sulfate symporter transmembrane region	22551	16948	CL0182	IT
+PF04893	Yip1	Yip1 domain	21880	16618	CL0112	Yip1
+PF01988	VIT1	VIT family	19034	13018	None	None
+PF03553	Na_H_antiporter	Na+/H+ antiporter family	17681	11269	CL0182	IT
+PF02366	PMT	Dolichyl-phosphate-mannose-protein mannosyltransferase	17551	12354	CL0111	GT-C
+PF02447	GntP_permease	GntP family permease	16828	10026	CL0182	IT
+PF04191	PEMT	Phospholipid methyltransferase	15917	11326	CL0115	Steroid_dh
+PF03030	H_PPase	Inorganic H+ pyrophosphatase	13694	9291	None	None
+PF01036	Bac_rhodopsin	Bacteriorhodopsin-like protein	5287	4177	CL0192	GPCR_A

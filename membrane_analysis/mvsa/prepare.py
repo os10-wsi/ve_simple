@@ -294,7 +294,8 @@ def main(argv=None) -> int:
     prot.to_parquet(args.out / "proteins.parquet", index=False)
     taxa = prot.loc[prot.in_ve_results, "taxid"]
     meta = {"ve_results": str(args.ve.resolve()), "shape_results": str(args.shape.resolve()),
-            "taxid": int(taxa.mode().iat[0]) if len(taxa) else None,
+            "taxid": int(taxa.mode().iat[0]) if len(taxa) else None, "n_taxa": int(taxa.nunique()),
+            "dataset": args.out.name.removeprefix("data_"),
             "n_labelled_pathogenic_benign": int(labelled["clinvar_class"].isin(
                 ["pathogenic", "likely_pathogenic", "benign", "likely_benign"]).sum()) if len(labelled) else 0,
             "sample_rate": args.sample_rate, "n_labelled": int(len(labelled)), "n_sample": int(len(sample)),

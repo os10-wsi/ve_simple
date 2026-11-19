@@ -13,7 +13,7 @@ from IPython.display import Markdown, display
 sys.path.insert(0, str(Path.cwd().parent))          # membrane_analysis/ (when not pip-installed)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 from mvsa import analyses as A, plots as P, report as R, stats as S
-from mvsa.data import load, available_predictors
+from mvsa.data import load, available_predictors, dataset_label
 from mvsa.groups import CLASS_ORDER, CLASS_LABEL, CLASS_COLOR, MEMBRANE, MAIN_PREDICTORS, PREDICTOR_GROUP, DIRECTION
 
 # ---------------------------------------------------------------- parameters
@@ -65,7 +65,7 @@ NARRATIVE = [
            "has no ClinVar); structural analyses use both organisms."),
     ("code", SETUP),
     ("md", "## 0. Data overview"),
-    ("code", "ov = A.overview(prot[prot.taxid == TAXID], lab_all)\nov"),
+    ("code", "ov = A.overview(prot, lab_all)\nov"),
     ("code", "src, what = (lab, 'labelled variants') if HAS_LABELS else (sample, 'sampled substitutions')\n"
              "cov = pd.DataFrame({c: [src.loc[src.protein_class == c, p].notna().mean() for p in PRED] for c in CLASS_ORDER}, index=PRED)\n"
              "print(f'Fraction of {what} with a score, by class:')\ncov.round(2)"),
@@ -149,7 +149,7 @@ NARRATIVE = [
              "dis_all.groupby('protein_class').disagreement_sd.describe().round(2)"),
     ("md", "### 2.6 Variants of uncertain significance\nWhere VUS accumulate, and how predictors would call them using thresholds tuned "
            "on soluble proteins. A large VUS burden with split predictor calls marks where experimental maps would add most."),
-    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    vb = A.vus_burden(prot[prot.taxid == TAXID])\n    display(vb.round(3))\n    per_vus, agree = A.vus_reclassification(lab_all[lab_all.protein_class.notna()], PRED, VEP)\n    if len(agree):\n        a = agree.set_index('class').reindex([c for c in CLASS_ORDER + ['NON_MULTIPASS'] if c in set(agree['class'])])\n        fig, ax = plt.subplots(figsize=(7, 2.8))\n        left = np.zeros(len(a))\n        for k, col in (('all pathogenic', '#e34948'), ('split', '#eda100'), ('all benign', '#2a78d6')):\n            ax.barh(range(len(a)), a[k], left=left, color=col, label=k); left += a[k].fillna(0).to_numpy()\n        ax.set_yticks(range(len(a)), [CLASS_LABEL[c] for c in a.index]); ax.invert_yaxis(); ax.set_xlabel('Fraction of VUS')\n        ax.set_title('Agreement of ' + ', '.join(P.label(v) for v in VEP) + ' on VUS', loc='left'); ax.legend(fontsize=7, ncol=3, loc='lower right')\n        fig.tight_layout(); P.save(fig, '2_6_vus_agreement')\n    display(per_vus.pivot_table(index='predictor', columns='class', values='called_pathogenic').round(3))"),
+    ("code", "if not HAS_LABELS:\n    print(SKIP)\nelse:\n    vb = A.vus_burden(prot)\n    display(vb.round(3))\n    per_vus, agree = A.vus_reclassification(lab_all[lab_all.protein_class.notna()], PRED, VEP)\n    if len(agree):\n        a = agree.set_index('class').reindex([c for c in CLASS_ORDER + ['NON_MULTIPASS'] if c in set(agree['class'])])\n        fig, ax = plt.subplots(figsize=(7, 2.8))\n        left = np.zeros(len(a))\n        for k, col in (('all pathogenic', '#e34948'), ('split', '#eda100'), ('all benign', '#2a78d6')):\n            ax.barh(range(len(a)), a[k], left=left, color=col, label=k); left += a[k].fillna(0).to_numpy()\n        ax.set_yticks(range(len(a)), [CLASS_LABEL[c] for c in a.index]); ax.invert_yaxis(); ax.set_xlabel('Fraction of VUS')\n        ax.set_title('Agreement of ' + ', '.join(P.label(v) for v in VEP) + ' on VUS', loc='left'); ax.legend(fontsize=7, ncol=3, loc='lower right')\n        fig.tight_layout(); P.save(fig, '2_6_vus_agreement')\n    display(per_vus.pivot_table(index='predictor', columns='class', values='called_pathogenic').round(3))"),
 
     # -------------------------------------------------------------------------------- (iii)
     ("md", "## 3. Structural differences\n\n### 3.1 Model confidence and disorder\nAll proteins (human and yeast). "
@@ -280,7 +280,7 @@ from IPython.display import Markdown, display
 sys.path.insert(0, str(Path.cwd().parent))
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 from mvsa import analyses as A, stats as S, talk as T, thermo as Th
-from mvsa.data import load, available_predictors
+from mvsa.data import load, available_predictors, dataset_label
 from mvsa.groups import MEMBRANE, MAIN_PREDICTORS, DIRECTION
 
 DATA_DIR = Path(os.environ.get("MVSA_DATA", "../data_human"))
@@ -293,7 +293,8 @@ GOOD_AUC = 0.85                                        # 'ranked well' threshold
 T.style(FIG_DIR)
 D = load(DATA_DIR)
 TAXID = D["meta"].get("taxid") or 9606
-ORGANISM = {9606: "human", 559292: "yeast"}.get(TAXID, str(TAXID))
+ORGANISM = dataset_label(D["meta"])
+STRUCT_SETS = [x for x in os.environ.get("MVSA_STRUCT_SETS", "human,yeast").split(",") if x]   # datasets on the structure figure
 lab_all = D["labelled_variants"]
 lab = S.labels(lab_all); lab = lab[lab.protein_class.notna()]
 sample = D["variant_sample"]
@@ -326,20 +327,20 @@ TALK = [
     ("md", "## 1. Membrane proteins are built differently"),
     ("code", "def shape_units_for(d):\n"
              "    meta = json.loads((d / 'meta.json').read_text())\n"
-             "    pr = pd.read_parquet(d / 'proteins.parquet', columns=['accession', 'taxid', 'class_annotation'])\n"
-             "    pr = pr[pr.taxid == meta['taxid']]\n"
+             "    pr = pd.read_parquet(d / 'proteins.parquet', columns=['accession', 'taxid', 'class_annotation', 'in_ve_results'])\n"
+             "    pr = pr[pr.in_ve_results.astype(bool)] if pr.in_ve_results.any() else pr[pr.taxid == meta['taxid']]\n"
              "    su = pd.read_parquet(d / 'shape_units.parquet')\n"
              "    su = su[su.accession.isin(pr.accession)].copy()\n"
              "    su['protein_class'] = su.accession.map(pr.set_index('accession').class_annotation)\n"
              "    return su\n\n"
-             "orgs = {o: DATA_DIR.parent / f'data_{o.lower()}' for o in ('Human', 'Yeast')}\n"
-             "orgs = {o: d for o, d in orgs.items() if (d / 'meta.json').exists()} or {ORGANISM.title(): DATA_DIR}\n"
+             "orgs = {o: DATA_DIR.parent / f'data_{o}' for o in STRUCT_SETS}\n"
+             "orgs = {o: d for o, d in orgs.items() if (d / 'meta.json').exists()} or {ORGANISM: DATA_DIR}\n"
              "contr = {o: A.structural_contrasts(shape_units_for(d)) for o, d in orgs.items()}\n"
              "fig = T.structure_dots(contr)\n"
              "c0 = next(iter(contr.values())); c0 = c0[c0['class'] == 'SOLUBLE'].set_index('metric')\n"
              "big = c0.reindex(list(T.STRUCT_SHOW)).cliffs_delta_size_matched.abs().dropna()\n"
              "n_big = int((big >= 0.5).sum())\n"
-             "T.headline(fig, 'Membrane proteins are built differently' + (' — in ' + ' and '.join(o.lower() for o in contr) if len(contr) > 1 else ''),\n"
+             "T.headline(fig, 'Membrane proteins are built differently' + (' — in ' + ', '.join(contr) if len(contr) > 1 else ''),\n"
              "           f'{n_big} of {len(big)} structural features differ strongly (|δ| ≥ 0.5) from size-matched soluble proteins')\n"
              "T.save(fig, '01_structure'); plt.show()\n"
              "lines = []\n"
@@ -550,6 +551,153 @@ TALK = [
 ]
 
 
+FAM_SETUP = r"""import os, sys, warnings
+from pathlib import Path
+import numpy as np, pandas as pd, matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+sys.path.insert(0, str(Path.cwd().parent))
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+from mvsa import talk as T, families as F
+from mvsa.data import load, available_predictors
+from mvsa.groups import MAIN_PREDICTORS
+
+DATA_DIR = Path(os.environ.get("MVSA_DATA", "../data_families"))
+FIG_DIR = Path(os.environ.get("MVSA_FIGURES", "../figures_families"))
+MEMBERSHIP = Path(os.environ.get("MVSA_MEMBERSHIP", "../../sets/families/family_membership.tsv"))
+MIN_PER_FAMILY = 20          # families with fewer scored proteins are left out of the comparisons
+
+T.style(FIG_DIR)
+TABLE_DIR = FIG_DIR / "tables"; TABLE_DIR.mkdir(parents=True, exist_ok=True)
+D = load(DATA_DIR)
+mem = F.membership(MEMBERSHIP)
+PCORR = pd.read_parquet(DATA_DIR / "protein_correlations.parquet") if (DATA_DIR / "protein_correlations.parquet").exists() else None
+PRED = [p for p in MAIN_PREDICTORS if p in available_predictors(D["variant_sample"])]
+t = F.protein_table(D, PCORR, mem, PRED)
+keep = t.family.value_counts()
+t = t[t.family.isin(keep[keep >= MIN_PER_FAMILY].index)]
+LAB = {"length": "length", "n_tm_helical": "TM helices", "plddt_mean": "pLDDT (whole chain)", "frac_excluded": "fraction disordered/excluded",
+       "plddt_trimmed": "pLDDT (structured part)", "frac_helix": "helix fraction", "inversion_index_kd": "hydrophobic surface (inversion)",
+       "h_depth_slope_kd": "hydrophobicity rises to core", "belt_contrast_scan_kd": "hydrophobic belt", "contact_density_ca": "packing",
+       "cavity_frac": "cavities", "a_over_c": "elongation", "sphericity_hull": "sphericity"}
+
+def pair_label(c):
+    a, b = c[4:].split("__")
+    return f"{T.name(a)} – {T.name(b)}"
+
+def note(*lines):
+    display(Markdown("**Slide notes**\n\n" + "\n".join(f"- {l}" for l in lines)))
+
+t = t.drop(columns=[c for c in t if (c.startswith('rho_') or c.startswith('dr_') or c.startswith('tm_')) and t[c].isna().all()])
+KEY = F.main_pair(t)          # ESM-1v - ThermoMPNN agreement, or the next sequence-vs-stability pair with data
+print(f"{t.accession.nunique()} proteins in {t.family.nunique()} families | predictors: {', '.join(PRED)} | "
+      f"per-protein correlations: {PCORR is not None}")
+if PCORR is None:
+    print("protein_correlations.parquet missing: run lsf/protcorr.sh families first; agreement sections are skipped")"""
+
+FAMILIES = [
+    ("md", "# Variant-effect predictors across membrane protein families\n\n"
+           "Representatives of the largest integral-membrane Pfam families (MMseqs2 cluster representatives, see "
+           "`scripts/family_sets.py`) scored with every predictor and compared family by family. There are no clinical labels, "
+           "so the questions are about the predictors themselves: how much they agree, how widely they spread their scores, "
+           "how strongly they penalise transmembrane positions, and which protein properties go with disagreement. "
+           "Figures go to `figures_families/`, tables to `figures_families/tables/`."),
+    ("code", FAM_SETUP),
+
+    ("md", "## 1. The families"),
+    ("code", "summ = F.family_summary(t, [f'dr_{p}' for p in PRED] + [c for c in t if c.startswith('rho_') or c.startswith('tm_')] + F.SHAPE + F.PROTEIN + ['plddt_trimmed'])\n"
+             "dom = pd.crosstab(t.family, t.domain.fillna('unknown'), normalize='index')\n"
+             "order = summ.sort_values('n_proteins').index.tolist()\n"
+             "fig, ax = plt.subplots(figsize=(11, 0.38 * len(order) + 1.8))\n"
+             "left = np.zeros(len(order))\n"
+             "for k, col in (('Bacteria', T.SOL), ('Archaea', '#8a9a5b'), ('Eukaryota', T.MP), ('unknown', T.LIGHT)):\n"
+             "    if k in dom:\n"
+             "        v = dom.reindex(order)[k].fillna(0).to_numpy(); ax.barh(range(len(order)), v, left=left, color=col, label=k); left += v\n"
+             "ax.set_yticks(range(len(order)), [f\"{f}  ({int(summ.loc[f, 'n_proteins'])}, {summ.loc[f, 'n_tm_helical']:.0f} TM)\" for f in order], fontsize=11)\n"
+             "ax.xaxis.set_major_formatter(plt.matplotlib.ticker.PercentFormatter(1.0)); ax.set_xlabel('Share of representatives')\n"
+             "ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=4)\n"
+             "T.headline(fig, f'{len(order)} membrane superfamilies, {t.accession.nunique():,} representative proteins',\n"
+             "           'Domain of life of the representatives; brackets: proteins scored, median TM helices')\n"
+             "T.save(fig, 'F1_families'); plt.show()\n"
+             "summ.round(3).to_csv(TABLE_DIR / 'family_summary.tsv', sep='\\t')\n"
+             "t.to_csv(TABLE_DIR / 'family_proteins.tsv', sep='\\t', index=False)\n"
+             "note(f\"Multipass by UniProt annotation: {(t.class_annotation == 'MULTIPASS').mean():.0%} of representatives (the rest are mostly unannotated TrEMBL topology)\",\n"
+             "     *[f'{f}: {int(r.n_proteins)} proteins, {r.frac_eukaryota:.0%} eukaryotic, median length {r.length:.0f}' for f, r in summ.sort_values('n_proteins', ascending=False).iterrows()])"),
+
+    ("md", "## 2. How much do the predictors agree, family by family?\n\n"
+           "Median per-protein Spearman ρ between two predictors over all substitutions. Rows are families, sorted by ESM-1v – ThermoMPNN "
+           "agreement; the colour shows how each family compares with the others for the same pair (z-score within the column)."),
+    ("code", "rho_cols = [c for c in summ if c.startswith('rho_')]\n"
+             "if rho_cols and KEY:\n"
+             "    key = KEY\n"
+             "    m = summ[rho_cols].sort_values(key)\n"
+             "    m.columns = [pair_label(c) for c in m.columns]\n"
+             "    fig = T.matrix(m, cbar='z-score within pair')\n"
+             "    lo_, hi_ = m.index[0], m.index[-1]\n"
+             "    col = pair_label(key)\n"
+             "    T.headline(fig, f'Sequence and stability predictors agree least in {lo_} and most in {hi_}',\n"
+             "               f'{col}: median ρ {m.loc[lo_, col]:.2f} vs {m.loc[hi_, col]:.2f}; numbers are medians over each family\\'s proteins')\n"
+             "    T.save(fig, 'F2_agreement_matrix'); plt.show()\n"
+             "    fig = T.family_boxes(t, key, f'Spearman ρ, {pair_label(key)}, per protein')\n"
+             "    spread = t.groupby('family')[key].median()\n"
+             "    T.headline(fig, f'{pair_label(key)} agreement ranges from {spread.min():.2f} to {spread.max():.2f} across families',\n"
+             "               'Each point is one representative protein; boxes show the interquartile range')\n"
+             "    T.save(fig, 'F3_thermo_esm_by_family'); plt.show()\n"
+             "    note(*[f'{pair_label(c)}: family medians {summ[c].min():.2f}–{summ[c].max():.2f} (lowest {summ[c].idxmin()}, highest {summ[c].idxmax()})' for c in rho_cols if summ[c].notna().any()])"),
+
+    ("md", "## 3. Score spread and how strongly TM positions are penalised"),
+    ("code", "dr = summ[[f'dr_{p}' for p in PRED if f'dr_{p}' in summ]].sort_values(f'dr_esm1v' if 'dr_esm1v' in summ else f'dr_{PRED[0]}')\n"
+             "dr.columns = [T.name(c[3:]) for c in dr.columns]\n"
+             "fig = T.matrix(dr, fmt='{:.2g}', cbar='z-score within predictor')\n"
+             "T.headline(fig, 'How widely each predictor spreads its scores, by family',\n"
+             "           'Median per-protein 5–95% range of oriented scores; a narrow range means the predictor barely separates substitutions')\n"
+             "T.save(fig, 'F4_dynamic_range'); plt.show()\n"
+             "tm = summ[[f'tm_{p}' for p in PRED if f'tm_{p}' in summ]]\n"
+             "if len(tm.columns):\n"
+             "    tm = tm.sort_values(tm.columns[0]); tm.columns = [T.name(c[3:]) for c in tm.columns]\n"
+             "    fig = T.matrix(tm, fmt='{:+.2g}', cbar='z-score within predictor')\n"
+             "    T.headline(fig, 'How much more damaging each predictor finds TM substitutions',\n"
+             "               'Median per protein of (median score in TM segments − median score outside); positive = TM penalised')\n"
+             "    T.save(fig, 'F5_tm_penalty'); plt.show()"),
+
+    ("md", "## 4. Structure of each family"),
+    ("code", "sc = [c for c in F.SHAPE if c in summ and c != 'plddt_mean'] + (['plddt_trimmed'] if 'plddt_trimmed' in summ else [])\n"
+             "sm = summ[sc].sort_values('inversion_index_kd' if 'inversion_index_kd' in sc else sc[0])\n"
+             "sm.columns = [LAB.get(c, c) for c in sm.columns]\n"
+             "fig = T.matrix(sm, fmt='{:.2g}', cbar='z-score within metric')\n"
+             "T.headline(fig, 'Structural fingerprint of each family', 'Median over representatives (trimmed chains)')\n"
+             "T.save(fig, 'F6_structure'); plt.show()"),
+
+    ("md", "## 5. What goes with disagreement?\n\n"
+           "Correlation between ESM-1v – ThermoMPNN agreement and protein properties: pooled over all proteins (open), and the median of "
+           "the correlations computed inside each family (filled). Only the within-family value is free of differences between families."),
+    ("code", "key = KEY\n"
+             "if key:\n"
+             "    feats = F.PROTEIN + [c for c in F.SHAPE if c != 'plddt_mean'] + ['plddt_trimmed', 'cluster_size'] + [f'dr_{p}' for p in PRED]\n"
+             "    drv = F.drivers(t, key, feats)\n"
+             "    assert len(drv), 'too few proteins per family to compute within-family correlations'\n"
+             "    fig = T.drivers_dots(drv, {**LAB, 'cluster_size': 'cluster size', **{f'dr_{p}': f'{T.name(p)} range' for p in PRED}})\n"
+             "    top = drv.iloc[0]\n"
+             "    T.headline(fig, f\"Within families, agreement goes with {LAB.get(top.feature, top.feature)} (ρ = {top.rho_within_median:+.2f})\",\n"
+             "               f'Spearman ρ between {pair_label(key)} agreement and each protein property')\n"
+             "    T.save(fig, 'F7_agreement_drivers'); plt.show()\n"
+             "    drv.round(3).to_csv(TABLE_DIR / 'agreement_drivers.tsv', sep='\\t', index=False)\n"
+             "    de = F.domain_effect(t, key)\n"
+             "    if len(de):\n"
+             "        de['diff'] = de.eukaryota - de.bacteria\n"
+             "        display(de.sort_values('diff').round(3).style.hide(axis='index'))\n"
+             "        note(f\"Eukaryotic minus bacterial agreement: median {de['diff'].median():+.2f} across {len(de)} families with both\")"),
+
+    ("md", "## 6. The least-agreeing proteins in each family"),
+    ("code", "if KEY:\n"
+             "    key = KEY\n"
+             "    worst = t.sort_values(key).groupby('family').head(5)\n"
+             "    cols = [c for c in ['family', 'accession', 'gene', 'protein_name', 'domain', 'kingdom', 'length', 'n_tm_helical', key,\n"
+             "                        F.pair_col('esm1v', 'saprot'), F.pair_col('thermompnn', 'solvent_exposure'), 'plddt_mean', 'frac_excluded'] if c in worst]\n"
+             "    worst[cols].to_csv(TABLE_DIR / 'least_agreeing_per_family.tsv', sep='\\t', index=False)\n"
+             "    display(worst[cols].round(3).style.hide(axis='index'))"),
+]
+
+
 def build(cells, path):
     nb = nbf.v4.new_notebook()
     nb.cells = [nbf.v4.new_markdown_cell(s) if k == "md" else nbf.v4.new_code_cell(s) for k, s in cells]
@@ -562,3 +710,4 @@ root = Path(__file__).resolve().parents[1] / "notebooks"
 build(NARRATIVE, root / "membrane_vs_soluble.ipynb")
 build(EXPLORE, root / "explore.ipynb")
 build(TALK, root / "talk_figures.ipynb")
+build(FAMILIES, root / "families.ipynb")
