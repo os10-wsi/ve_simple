@@ -9,6 +9,19 @@ Every dataset goes through the same four stages as the human and yeast proteomes
 
 Datasets are identified by an ID file. Its basename tags the phase-1/3 jobs and chunk folders, so datasets never collide.
 
+## Quick route: the staged scripts
+
+Edit `scripts/new_datasets/config.sh` (proteomes and datasets), then from the repository root:
+
+    bash scripts/new_datasets/1_ids.sh        # proteome ID lists + family selection job (MMseqs2)
+    bash scripts/new_datasets/2_gpu.sh        # GPU phase 1; re-run to resubmit incomplete chunks
+    bash scripts/new_datasets/3_assemble.sh   # once a dataset's GPU chunks are complete
+    bash scripts/new_datasets/4_shape.sh      # once all GPU jobs have finished
+    bash scripts/new_datasets/5_mvsa.sh       # prepare, correlations and notebooks (waits for the shape jobs)
+    bash scripts/new_datasets/status.sh       # where each dataset stands, and the file quota
+
+Every stage is safe to re-run: finished work is skipped. The sections below are what the stages run.
+
 ## Budget before you start
 
 | | proteins | GPU hours (phase 1)* | cache files** |
